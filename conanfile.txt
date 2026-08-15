@@ -1,0 +1,12 @@
+[requires]
+onetbb/2023.1.0
+
+[generators]
+CMakeDeps
+CMakeToolchain
+
+[layout]
+cmake_layout
+
+[options]
+onetbb/*:tbbmalloc=False
