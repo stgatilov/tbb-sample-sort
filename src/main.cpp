@@ -30,6 +30,7 @@ std::vector<uint64_t> readBinFile(const char *filename) {
 //#define REDUCE_BITS 40
 //#define TBB_FORCE_THREADS 1
 
+#define CLASSIFY_UNROLL 8
 #define SMALLSORT_MAX 32
 
 bool isPot(size_t x) {
@@ -132,13 +133,27 @@ struct MultiPivot {
         assert(res == 0 || !(value < sorted_[res - 1]));
         return res;
     }
+
+    template<size_t N> inline void classifyBlock(const Value *value, size_t *res) const {
+        Span<const Value> tree = tree_;
+        for (size_t i = 0; i < N; i++)
+            res[i] = 0;
+        for (size_t b = 0; b < numBits_; b++) {
+            for (size_t i = 0; i < N; i++) {
+                bool isLess = (value[i] < tree_[res[i]]);
+                res[i] = 2 * res[i] + 1 + size_t(!isLess);
+            }
+        }
+        for (size_t i = 0; i < N; i++)
+            res[i] -= (numBuckets_ - 1);
+    }
 };
 
 void smallSort(Span<Value> arr) {
 #if 0
     std::sort(arr.data(), arr.data() + arr.size());
 #else
-    for (size_t i = 0; i < arr.size(); i++)
+    for (size_t i = 1; i < arr.size(); i++)
         for (size_t j = 0; j < i; j++)
             if (arr[i] < arr[j])
                 std::swap(arr[i], arr[j]);
@@ -187,7 +202,19 @@ void multiPartition(
     parallelWorkers(numWorkers, [&](size_t t) {
         size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
         size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
-        for (size_t i = l; i < r; i++) {
+        size_t i = l;
+#ifdef CLASSIFY_UNROLL        
+        for (; i + CLASSIFY_UNROLL <= r; i += CLASSIFY_UNROLL) {
+            size_t bidx[CLASSIFY_UNROLL];
+            pivot.classifyBlock<CLASSIFY_UNROLL>(&srcElems[i], bidx);
+            for (size_t q = 0; q < CLASSIFY_UNROLL; q++) {
+                size_t b = bidx[q];
+                bucketOf[i + q] = b;
+                localHisto[t][b]++;
+            }
+        }
+#endif        
+        for (; i < r; i++) {
             size_t b = pivot.classifyOne(srcElems[i]);
             bucketOf[i] = b;
             localHisto[t][b]++;
