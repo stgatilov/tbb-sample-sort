@@ -4,7 +4,7 @@
 int main() {
     FILE *f = fopen("input.bin", "wb");
 
-    uint64_t num = 10 * 1000 * 1000;
+    uint64_t num = 300 * 1000 * 1000;
     fwrite(&num, sizeof(num), 1, f);
 
     std::mt19937_64 random;
