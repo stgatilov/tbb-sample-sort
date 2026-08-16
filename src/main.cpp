@@ -30,6 +30,8 @@ std::vector<uint64_t> readBinFile(const char *filename) {
 //#define REDUCE_BITS 40
 //#define TBB_FORCE_THREADS 1
 
+#define SMALLSORT_MAX 32
+
 bool isPot(size_t x) {
     return (x & (x - 1)) == 0;
 }
@@ -57,6 +59,16 @@ struct Random {
         return x % maxExclusive;
     }
 };
+
+template<class Lambda> void parallelWorkers(size_t numWorkers, Lambda&& lambda) {
+    assert(numWorkers > 0);
+    if (numWorkers == 1) {
+        lambda(0);
+    }
+    else {
+        tbb::parallel_for<size_t>(0, numWorkers, lambda);
+    }
+}
 
 
 typedef uint64_t Value;
@@ -122,6 +134,16 @@ struct MultiPivot {
     }
 };
 
+void smallSort(Span<Value> arr) {
+#if 0
+    std::sort(arr.data(), arr.data() + arr.size());
+#else
+    for (size_t i = 0; i < arr.size(); i++)
+        for (size_t j = 0; j < i; j++)
+            if (arr[i] < arr[j])
+                std::swap(arr[i], arr[j]);
+#endif
+}
 
 struct SharedData;
 
@@ -149,6 +171,7 @@ struct SharedData {
     Array<uint8_t> bucketIndexStore_;
 
     uint64_t randomSeed_ = 0xDEADBEEF01234567ull;
+    tbb::task_group taskGroup_;
 };
 
 void multiPartition(
@@ -161,7 +184,7 @@ void multiPartition(
     assert(splits.size() == numBuckets + 1);
     
     std::vector<std::vector<size_t>> localHisto(numWorkers, std::vector<size_t>(numBuckets, 0));
-    tbb::parallel_for<size_t>(0, numWorkers, [&](size_t t) {
+    parallelWorkers(numWorkers, [&](size_t t) {
         size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
         size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
         for (size_t i = l; i < r; i++) {
@@ -190,7 +213,7 @@ void multiPartition(
         assert(tsum == globalHisto[b + 1]);
     }
     
-    tbb::parallel_for<size_t>(0, numWorkers, [&](size_t t) {
+    parallelWorkers(numWorkers, [&](size_t t) {
         size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
         size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
         for (size_t i = l; i < r; i++) {
@@ -215,6 +238,17 @@ void multiPartition(
 #endif    
 }
 
+void processBase(const TaskData &task) {
+    Span<Value> srcElems = task.shared_->elemsSpans_[task.world_].subspan(task.first_, task.len_);
+    smallSort(srcElems);
+
+    if (task.world_ == 0)
+        return;
+
+    Span<Value> dstElems = task.shared_->elemsSpans_[task.world_ ^ 1].subspan(task.first_, task.len_);
+    for (size_t i = 0; i < srcElems.size(); i++)
+        dstElems[i] = srcElems[i];
+}
 
 void processRecursive(TaskData task) {
     SharedData *shared = task.shared_;
@@ -226,16 +260,22 @@ void processRecursive(TaskData task) {
     Span<Value> dstElems = shared->elemsSpans_[task.world_ ^ 1].subspan(task.first_, task.len_);
     Span<uint8_t> bucketOf = Span<uint8_t>(shared->bucketIndexStore_).subspan(task.first_, task.len_);
 
-    if (task.len_ < (1 << 10)) {
-        std::sort(srcElems.data(), srcElems.data() + srcElems.size());
-        if (task.world_ != 0) {
-            for (size_t i = 0; i < srcElems.size(); i++)
-                dstElems[i] = srcElems[i];
-        }
-        return;
+    assert(task.len_ > SMALLSORT_MAX);
+    size_t logn = log2up(task.len_);
+
+    size_t numBuckets;
+    if (task.len_ <= 4096) {
+        // one level: aim for 16 elements per bucket
+        size_t logb = logn - 4;
+        numBuckets = 1 << logb;
+    }
+    else {
+        // two levels: aim for 16 elements per bucket
+        size_t logb = (logn - 4) / 2;
+        numBuckets = 1 << logb;
+        numBuckets = std::min<size_t>(numBuckets, 256);
     }
 
-    size_t numBuckets = 256;
     perThread->pivot_.select(srcElems, numBuckets, task.random_, perThread->samplesStore_);
 
     perThread->splitsStore_.resize(numBuckets + 1);
@@ -245,22 +285,33 @@ void processRecursive(TaskData task) {
         task.numWorkers_, bucketOf
     );
 
-    tbb::parallel_for<size_t>(0, numBuckets, [&](size_t t) {
-        TaskData subTask;
-        subTask.shared_ = task.shared_;
+    TaskData subTask;
+    subTask.shared_ = task.shared_;
+    subTask.world_ = task.world_ ^ 1;
+    subTask.numWorkers_ = (task.numWorkers_ + numBuckets - 1) / numBuckets;
+    for (size_t t = 0; t < numBuckets; t++) {
         subTask.first_ = task.first_ + perThread->splitsStore_[t];
         subTask.len_ = perThread->splitsStore_[t + 1] - perThread->splitsStore_[t];
-        subTask.world_ = task.world_ ^ 1;
-        subTask.numWorkers_ = (task.numWorkers_ + numBuckets - 1) / numBuckets;
+        if (subTask.len_ <= SMALLSORT_MAX) {
+            processBase(subTask);
+            continue;
+        }
         if (t == 0)
             subTask.random_ = task.random_;
         else
             subTask.random_.initStream(task.shared_->randomSeed_, subTask.first_);
-        processRecursive(subTask);
-    });
+        shared->taskGroup_.run([subTask] {
+            processRecursive(subTask);
+        });
+    }
 }
 
 void sort(Value *begin, size_t num) {
+    if (num < SMALLSORT_MAX) {
+        smallSort({begin, num});
+        return;
+    }
+
     SharedData shared;
     shared.elemsCopyStore_.resize(num);
     shared.bucketIndexStore_.resize(num);
@@ -276,7 +327,9 @@ void sort(Value *begin, size_t num) {
     task.world_ = 0;
     task.random_.initStream(shared.randomSeed_, task.first_);
 
-    processRecursive(task);
+    shared.taskGroup_.run_and_wait([&task] {
+        processRecursive(task);
+    });
 }
 
 //===============================================
