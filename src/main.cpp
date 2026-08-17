@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <span>
 #include <chrono>
+#include <type_traits>
 
 #include <oneapi/tbb/parallel_for.h>
 #include <oneapi/tbb/enumerable_thread_specific.h>
@@ -71,10 +72,104 @@ template<class Lambda> void parallelWorkers(size_t numWorkers, Lambda&& lambda) 
     }
 }
 
+// requirements:
+//   destructor, move constructor: must not throw
+template<class T> struct ValueTraits {
+    inline void relocateOne(T *dst, const T *src) noexcept {
+        *dst = static_cast<T&&>(*src);
+        *src.~T();
+    }
+    void relocateMany(T *dst, const T *src, size_t n) noexcept {
+        assert(dst >= src + n || src >= dst + n);
+        for (size_t i = 0; i < n; i++)
+            relocateOne(&dst[i], &src[i]);
+    }
+};
+
+// because I need this to work on C++17
+template<class T> class Span {
+    T *ptr_ = nullptr;
+    size_t num_ = 0;
+
+public:
+    Span() = default;
+    inline Span(T *ptr, size_t num)
+        : ptr_(ptr)
+        , num_(num)
+    {}
+    template<class U, std::enable_if_t<std::is_same_v<U, std::add_const_t<T>>, int> = 0>
+    inline operator Span<U>() const {
+        return {ptr_, num_};
+    }
+
+    inline T *data() const { return ptr_; }
+    inline size_t size() const { return num_; }
+
+    inline T &operator[] (size_t i) const {
+        assert(i < num_);
+        return ptr_[i];
+    }
+
+    inline Span<T> subspan(size_t start, size_t len) const {
+        assert(start + len <= num_);
+        return {ptr_ + start, len};
+    }
+};
+
+// simple reusable array of raw memory
+// elements lifetime management is external
+template<class T> class Array {
+    T *ptr_ = nullptr;
+    size_t num_ = 0;
+    size_t cap_ = 0;
+
+    void grow(size_t n) {
+        assert(n > cap_);
+        n = std::max(n, 2 * cap_ + 1);
+        if (cap_ > 0)
+            operator delete[] (ptr_);
+        if (n > 0)
+            ptr_ = (T*) operator new[] (n * sizeof(T), std::align_val_t(alignof(T)));
+        cap_ = n;
+    }
+
+public:
+    ~Array() {
+        if (cap_ > 0)
+            operator delete[] (ptr_);
+    }
+    Array() = default;
+
+    inline T *data() { return ptr_; }
+    inline const T *data() const { return ptr_; }
+    inline size_t size() const { return num_; }
+
+    inline T &operator[] (size_t i) {
+        assert(i < num_);
+        return ptr_[i];
+    }
+    inline const T &operator[] (size_t i) const {
+        assert(i < num_);
+        return ptr_[i];
+    }
+
+    void resize(size_t n) {
+        if (n > cap_)
+            grow(n);
+        num_ = n;
+    }
+
+    Array(const Array&) = delete;
+    Array& operator=(const Array&) = delete;
+    Array(const Array&&) = delete;
+    Array& operator=(const Array&&) = delete;
+};
+
+template<class T> inline Span<T> makeSpan(Array<T> &arr) { return {arr.data(), arr.size()}; }
+template<class T> inline Span<const T> makeSpan(const Array<T> &arr) { return {arr.data(), arr.size()}; }
+
 
 typedef uint64_t Value;
-template<class T> using Span = std::span<T>;
-template<class T> using Array = std::vector<T>;
 
 struct MultiPivot {
     size_t numBits_ = 0;
@@ -93,7 +188,7 @@ struct MultiPivot {
         numSamples = std::max(numSamples, numBuckets);
 
         samplesStore.resize(numSamples);
-        Span<Value> samples = samplesStore;
+        Span<Value> samples = makeSpan(samplesStore);
         for (size_t i = 0; i < numSamples; i++) {
             size_t index = random.generate(numElems);
             samples[i] = arr[index];
@@ -123,7 +218,7 @@ struct MultiPivot {
 
     inline size_t classifyOne(const Value &value) const {
         size_t res = 0;
-        Span<const Value> tree = tree_;
+        Span<const Value> tree = makeSpan(tree_);
         for (size_t b = 0; b < numBits_; b++) {
             bool isLess = (value < tree[res]);
             res = 2 * res + 1 + size_t(!isLess);
@@ -135,7 +230,7 @@ struct MultiPivot {
     }
 
     template<size_t N> inline void classifyBlock(const Value *value, size_t *res) const {
-        Span<const Value> tree = tree_;
+        Span<const Value> tree = makeSpan(tree_);
         for (size_t i = 0; i < N; i++)
             res[i] = 0;
         for (size_t b = 0; b < numBits_; b++) {
@@ -285,7 +380,7 @@ void processRecursive(TaskData task) {
 
     Span<Value> srcElems = shared->elemsSpans_[task.world_].subspan(task.first_, task.len_);
     Span<Value> dstElems = shared->elemsSpans_[task.world_ ^ 1].subspan(task.first_, task.len_);
-    Span<uint8_t> bucketOf = Span<uint8_t>(shared->bucketIndexStore_).subspan(task.first_, task.len_);
+    Span<uint8_t> bucketOf = makeSpan(shared->bucketIndexStore_).subspan(task.first_, task.len_);
 
     assert(task.len_ > SMALLSORT_MAX);
     size_t logn = log2up(task.len_);
@@ -308,7 +403,7 @@ void processRecursive(TaskData task) {
     perThread->splitsStore_.resize(numBuckets + 1);
     multiPartition(
         srcElems, perThread->pivot_,
-        dstElems, perThread->splitsStore_,
+        dstElems, makeSpan(perThread->splitsStore_),
         task.numWorkers_, bucketOf
     );
 
@@ -344,7 +439,7 @@ void sort(Value *begin, size_t num) {
     shared.bucketIndexStore_.resize(num);
     shared.numElems_ = num;
     shared.elemsSpans_[0] = {begin, num};
-    shared.elemsSpans_[1] = shared.elemsCopyStore_;
+    shared.elemsSpans_[1] = makeSpan(shared.elemsCopyStore_);
 
     TaskData task;
     task.shared_ = &shared;
