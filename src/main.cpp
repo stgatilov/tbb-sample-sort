@@ -73,16 +73,35 @@ template<class Lambda> void parallelWorkers(size_t numWorkers, Lambda&& lambda) 
 }
 
 // requirements:
-//   destructor, move constructor: must not throw
+//   lifetime methods must not throw...
 template<class T> struct ValueTraits {
-    inline void relocateOne(T *dst, const T *src) noexcept {
-        *dst = static_cast<T&&>(*src);
-        *src.~T();
+    static inline void relocateOne(T &dst, T &src) noexcept {
+        new(&dst) T(static_cast<T&&>(src));
+        src.~T();
     }
-    void relocateMany(T *dst, const T *src, size_t n) noexcept {
+    static inline void destroyOne(T &dst) noexcept {
+        dst.~T();
+    }
+    static inline void copyOne(T &dst, const T &src) noexcept {
+        new(&dst) T(src);
+    }
+    static inline void constructDefaultOne(T &dst) noexcept {
+        static_assert(std::is_integral_v<T>); // never used for elements
+        new(&dst) T;
+    }
+
+    static void relocateMany(T *dst, T *src, size_t n) noexcept {
         assert(dst >= src + n || src >= dst + n);
         for (size_t i = 0; i < n; i++)
-            relocateOne(&dst[i], &src[i]);
+            relocateOne(dst[i], src[i]);
+    }
+    static void destroyMany(T *dst, size_t n) noexcept {
+        for (size_t i = 0; i < n; i++)
+            destroyOne(dst[i]);
+    }
+    static void constructDefaultMany(T *dst, size_t n) noexcept {
+        for (size_t i = 0; i < n; i++)
+            constructDefaultOne(dst[i]);
     }
 };
 
@@ -191,7 +210,7 @@ struct MultiPivot {
         Span<Value> samples = makeSpan(samplesStore);
         for (size_t i = 0; i < numSamples; i++) {
             size_t index = random.generate(numElems);
-            samples[i] = arr[index];
+            ValueTraits<Value>::copyOne(samples[i], arr[index]);
         }
 
         std::sort(samples.data(), samples.data() + samples.size());
@@ -199,8 +218,9 @@ struct MultiPivot {
         sorted_.resize(numBuckets - 1);
         for (size_t i = 1; i <= numBuckets - 1; i++) {
             uint64_t pos = uint64_t(numSamples) * i / numBuckets;
-            sorted_[i - 1] = samples[pos];
+            ValueTraits<Value>::copyOne(sorted_[i - 1], samples[pos]);
         }
+        ValueTraits<Value>::destroyMany(samples.data(), samples.size());
 
         size_t numBits = log2up(numBuckets);
 
@@ -209,7 +229,7 @@ struct MultiPivot {
         for (int b = numBits - 1; b >= 0; b--) {
             size_t len = (1 << b);
             for (size_t i = len - 1; i < numBuckets; i += len * 2)
-                tree_[v++] = sorted_[i];
+                ValueTraits<Value>::relocateOne(tree_[v++], sorted_[i]);
         }
 
         numBuckets_ = numBuckets;
@@ -285,7 +305,7 @@ struct SharedData {
 };
 
 void multiPartition(
-    Span<const Value> srcElems, const MultiPivot &pivot,
+    Span<Value> srcElems, const MultiPivot &pivot,
     Span<Value> dstElems, Span<size_t> splits, 
     size_t numWorkers, Span<uint8_t> bucketOf
 ) {
@@ -298,7 +318,7 @@ void multiPartition(
         size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
         size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
         size_t i = l;
-#ifdef CLASSIFY_UNROLL        
+#ifdef CLASSIFY_UNROLL
         for (; i + CLASSIFY_UNROLL <= r; i += CLASSIFY_UNROLL) {
             size_t bidx[CLASSIFY_UNROLL];
             pivot.classifyBlock<CLASSIFY_UNROLL>(&srcElems[i], bidx);
@@ -341,7 +361,7 @@ void multiPartition(
         for (size_t i = l; i < r; i++) {
             size_t b = bucketOf[i];
             size_t &pos = localHisto[t][b];
-            dstElems[pos++] = srcElems[i];
+            ValueTraits<Value>::relocateOne(dstElems[pos++], srcElems[i]);
         }
     });
 
@@ -368,8 +388,7 @@ void processBase(const TaskData &task) {
         return;
 
     Span<Value> dstElems = task.shared_->elemsSpans_[task.world_ ^ 1].subspan(task.first_, task.len_);
-    for (size_t i = 0; i < srcElems.size(); i++)
-        dstElems[i] = srcElems[i];
+    ValueTraits<Value>::relocateMany(dstElems.data(), srcElems.data(), srcElems.size());
 }
 
 void processRecursive(TaskData task) {
@@ -437,6 +456,7 @@ void sort(Value *begin, size_t num) {
     SharedData shared;
     shared.elemsCopyStore_.resize(num);
     shared.bucketIndexStore_.resize(num);
+    ValueTraits<uint8_t>::constructDefaultMany(shared.bucketIndexStore_.data(), shared.bucketIndexStore_.size());
     shared.numElems_ = num;
     shared.elemsSpans_[0] = {begin, num};
     shared.elemsSpans_[1] = makeSpan(shared.elemsCopyStore_);
@@ -452,6 +472,8 @@ void sort(Value *begin, size_t num) {
     shared.taskGroup_.run_and_wait([&task] {
         processRecursive(task);
     });
+
+    ValueTraits<uint8_t>::destroyMany(shared.bucketIndexStore_.data(), shared.bucketIndexStore_.size());
 }
 
 //===============================================
