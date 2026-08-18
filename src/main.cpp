@@ -7,6 +7,7 @@
 #include <oneapi/tbb/parallel_for.h>
 #include <oneapi/tbb/enumerable_thread_specific.h>
 #include <oneapi/tbb/global_control.h>
+#include <oneapi/tbb/parallel_sort.h>
 
 #include "pcg_basic.h"
 
@@ -30,6 +31,7 @@ std::vector<uint64_t> readBinFile(const char *filename) {
 //#define SLOW_ASSERT 1
 //#define REDUCE_BITS 40
 //#define TBB_FORCE_THREADS 1
+#define COLLECT_STATS 1
 
 #define CLASSIFY_UNROLL 8
 #define SMALLSORT_MAX 32
@@ -82,8 +84,11 @@ template<class T> struct ValueTraits {
     static inline void destroyOne(T &dst) noexcept {
         dst.~T();
     }
-    static inline void copyOne(T &dst, const T &src) noexcept {
+    static inline void constructCopyOne(T &dst, const T &src) noexcept {
         new(&dst) T(src);
+    }
+    static inline void swapOne(T &dst, T &src) noexcept {
+        std::swap(dst, src);
     }
     static inline void constructDefaultOne(T &dst) noexcept {
         static_assert(std::is_integral_v<T>); // never used for elements
@@ -190,6 +195,56 @@ template<class T> inline Span<const T> makeSpan(const Array<T> &arr) { return {a
 
 typedef uint64_t Value;
 
+void smallSort(Span<Value> arr) {
+#if 0
+    std::sort(arr.data(), arr.data() + arr.size());
+#else
+    for (size_t i = 1; i < arr.size(); i++)
+        for (size_t j = 0; j < i; j++)
+            if (arr[i] < arr[j])
+                ValueTraits<Value>::swapOne(arr[i], arr[j]);
+#endif
+}
+
+void quickSort(Span<Value> arr, Random &random) {
+#if 0
+    std::sort(arr.data(), arr.data() + arr.size());
+#else
+    if (arr.size() <= SMALLSORT_MAX)
+        return smallSort(arr);
+
+    size_t idxA = random.generate(arr.size());
+    size_t idxB = random.generate(arr.size());
+    size_t idxC = random.generate(arr.size());
+    if (arr[idxB] < arr[idxA]) ValueTraits<Value>::swapOne(arr[idxA], arr[idxB]);
+    if (arr[idxC] < arr[idxA]) ValueTraits<Value>::swapOne(arr[idxA], arr[idxC]);
+    if (arr[idxC] < arr[idxB]) ValueTraits<Value>::swapOne(arr[idxB], arr[idxC]);
+    assert(arr[idxA] <= arr[idxB] && arr[idxB] <= arr[idxC]);
+
+    alignas(Value) char buffer[sizeof(Value)];
+    Value *pivot = (Value*)buffer;
+    ValueTraits<Value>::constructCopyOne(*pivot, arr[idxB]);
+
+    ptrdiff_t l = -1;
+    ptrdiff_t r = arr.size();
+    while (1) {
+        do { l++; } while (arr[l] < *pivot);
+        do { r--; } while (*pivot < arr[r]);
+        if (l >= r) break;
+        ValueTraits<Value>::swapOne(arr[l], arr[r]);
+    }
+ 
+    if (r < arr.size() - 1)
+        r++;
+
+    ValueTraits<Value>::destroyOne(*pivot);
+
+    assert(r > 0 && r < arr.size());
+    quickSort(arr.subspan(0, r), random);
+    quickSort(arr.subspan(r, arr.size() - r), random);
+#endif
+}
+
 struct MultiPivot {
     size_t numBits_ = 0;
     size_t numBuckets_ = 0;
@@ -210,15 +265,15 @@ struct MultiPivot {
         Span<Value> samples = makeSpan(samplesStore);
         for (size_t i = 0; i < numSamples; i++) {
             size_t index = random.generate(numElems);
-            ValueTraits<Value>::copyOne(samples[i], arr[index]);
+            ValueTraits<Value>::constructCopyOne(samples[i], arr[index]);
         }
 
-        std::sort(samples.data(), samples.data() + samples.size());
+        quickSort(samples, random);
 
         sorted_.resize(numBuckets - 1);
         for (size_t i = 1; i <= numBuckets - 1; i++) {
             uint64_t pos = uint64_t(numSamples) * i / numBuckets;
-            ValueTraits<Value>::copyOne(sorted_[i - 1], samples[pos]);
+            ValueTraits<Value>::constructCopyOne(sorted_[i - 1], samples[pos]);
         }
         ValueTraits<Value>::destroyMany(samples.data(), samples.size());
 
@@ -264,17 +319,6 @@ struct MultiPivot {
     }
 };
 
-void smallSort(Span<Value> arr) {
-#if 0
-    std::sort(arr.data(), arr.data() + arr.size());
-#else
-    for (size_t i = 1; i < arr.size(); i++)
-        for (size_t j = 0; j < i; j++)
-            if (arr[i] < arr[j])
-                std::swap(arr[i], arr[j]);
-#endif
-}
-
 struct SharedData;
 
 struct ThreadData {
@@ -302,6 +346,9 @@ struct SharedData {
 
     uint64_t randomSeed_ = 0xDEADBEEF01234567ull;
     tbb::task_group taskGroup_;
+#if COLLECT_STATS
+    std::atomic_int sizeStats_[64];
+#endif
 };
 
 void multiPartition(
@@ -403,6 +450,9 @@ void processRecursive(TaskData task) {
 
     assert(task.len_ > SMALLSORT_MAX);
     size_t logn = log2up(task.len_);
+#if COLLECT_STATS
+    shared->sizeStats_[logn].fetch_add(1, std::memory_order_relaxed);
+#endif
 
     size_t numBuckets;
     if (task.len_ <= 4096) {
@@ -427,12 +477,13 @@ void processRecursive(TaskData task) {
     );
 
     TaskData subTask;
+    Span<const size_t> splits = makeSpan(perThread->splitsStore_);
     subTask.shared_ = task.shared_;
     subTask.world_ = task.world_ ^ 1;
     subTask.numWorkers_ = (task.numWorkers_ + numBuckets - 1) / numBuckets;
     for (size_t t = 0; t < numBuckets; t++) {
-        subTask.first_ = task.first_ + perThread->splitsStore_[t];
-        subTask.len_ = perThread->splitsStore_[t + 1] - perThread->splitsStore_[t];
+        subTask.first_ = task.first_ + splits[t];
+        subTask.len_ = splits[t + 1] - splits[t];
         if (subTask.len_ <= SMALLSORT_MAX) {
             processBase(subTask);
             continue;
@@ -447,7 +498,7 @@ void processRecursive(TaskData task) {
     }
 }
 
-void sort(Value *begin, size_t num) {
+void sampleSort(Value *begin, size_t num) {
     if (num < SMALLSORT_MAX) {
         smallSort({begin, num});
         return;
@@ -474,6 +525,11 @@ void sort(Value *begin, size_t num) {
     });
 
     ValueTraits<uint8_t>::destroyMany(shared.bucketIndexStore_.data(), shared.bucketIndexStore_.size());
+
+#if COLLECT_STATS
+    for (int i = 1; i < 32; i++)
+        printf("L%02d: %7d [%zu..%zu)\n", i, shared.sizeStats_[i].load(), size_t(1) << (i-1), size_t(1) << i);
+#endif        
 }
 
 //===============================================
@@ -500,7 +556,11 @@ int main() {
     auto t1 = getTimestamp();
     printf("%4.0lf ms : read input\n", getTimeDiff(t0, t1));
 
-    sort(input.data(), input.size());
+#if 1
+    sampleSort(input.data(), input.size());
+#else
+    tbb::parallel_sort(input.data(), input.data() + input.size());
+#endif
     auto t2 = getTimestamp();
     printf("%4.0lf ms : sort\n", getTimeDiff(t1, t2));
 
