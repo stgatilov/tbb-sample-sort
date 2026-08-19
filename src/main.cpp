@@ -515,7 +515,7 @@ void sampleSort(Value *begin, size_t num) {
     task.shared_ = &shared;
     task.first_ = 0;
     task.len_ = shared.numElems_;
-    task.numWorkers_ = tbb::this_task_arena::max_concurrency() * 3;
+    task.numWorkers_ = tbb::this_task_arena::max_concurrency();
     task.world_ = 0;
     task.random_.initStream(shared.randomSeed_, task.first_);
 
