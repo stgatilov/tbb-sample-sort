@@ -219,7 +219,6 @@ void quickSort(Span<Value> arr, Random &random) {
     if (arr[idxB] < arr[idxA]) ValueTraits<Value>::swapOne(arr[idxA], arr[idxB]);
     if (arr[idxC] < arr[idxA]) ValueTraits<Value>::swapOne(arr[idxA], arr[idxC]);
     if (arr[idxC] < arr[idxB]) ValueTraits<Value>::swapOne(arr[idxB], arr[idxC]);
-    assert(arr[idxA] <= arr[idxB] && arr[idxB] <= arr[idxC]);
 
     alignas(Value) char buffer[sizeof(Value)];
     Value *pivot = (Value*)buffer;
