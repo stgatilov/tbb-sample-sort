@@ -203,6 +203,8 @@ void smallSort(Span<Value> arr) {
         for (size_t j = 0; j < i; j++)
             if (arr[i] < arr[j])
                 ValueTraits<Value>::swapOne(arr[i], arr[j]);
+
+    assert(std::is_sorted(arr.data(), arr.data() + arr.size()));                
 #endif
 }
 
@@ -241,6 +243,8 @@ void quickSort(Span<Value> arr, Random &random) {
     assert(r > 0 && r < arr.size());
     quickSort(arr.subspan(0, r), random);
     quickSort(arr.subspan(r, arr.size() - r), random);
+
+    assert(std::is_sorted(arr.data(), arr.data() + arr.size()));
 #endif
 }
 
@@ -283,7 +287,7 @@ struct MultiPivot {
         for (int b = numBits - 1; b >= 0; b--) {
             size_t len = (1 << b);
             for (size_t i = len - 1; i < numBuckets; i += len * 2)
-                ValueTraits<Value>::relocateOne(tree_[v++], sorted_[i]);
+                ValueTraits<Value>::constructCopyOne(tree_[v++], sorted_[i]);
         }
 
         numBuckets_ = numBuckets;
@@ -297,9 +301,14 @@ struct MultiPivot {
             bool isLess = (value < tree[res]);
             res = 2 * res + 1 + size_t(!isLess);
         }
+
         res -= (numBuckets_ - 1);
         assert(res == numBuckets_ - 1 || (value < sorted_[res]));
         assert(res == 0 || !(value < sorted_[res - 1]));
+
+        if (res > 0 && value == sorted_[res - 1])
+            res--;
+        assert(res < numBuckets_);
         return res;
     }
 
@@ -313,8 +322,11 @@ struct MultiPivot {
                 res[i] = 2 * res[i] + 1 + size_t(!isLess);
             }
         }
-        for (size_t i = 0; i < N; i++)
+        for (size_t i = 0; i < N; i++) {
             res[i] -= (numBuckets_ - 1);
+            if (res[i] > 0 && value[i] == sorted_[res[i] - 1])
+                res[i]--;
+        }
     }
 };
 
@@ -419,22 +431,27 @@ void multiPartition(
     for (size_t b = 0; b < numBuckets; b++) {
         assert(splits[b] <= splits[b + 1]);
         for (size_t i = splits[b]; i < splits[b + 1]; i++) {
-            size_t vb = pivot.classifyOne(dstElems[i]);
-            assert(vb == b);
+            assert(b == 0 || dstElems[i] >= pivot.sorted_[b - 1]);
+            assert(b == numBuckets - 1 || dstElems[i] <= pivot.sorted_[b]);
         }
     }
 #endif    
+}
+
+void copyBack(const TaskData &task) {
+    if (task.world_ == 0)
+        return;
+
+    Span<Value> srcElems = task.shared_->elemsSpans_[task.world_].subspan(task.first_, task.len_);
+    Span<Value> dstElems = task.shared_->elemsSpans_[task.world_ ^ 1].subspan(task.first_, task.len_);
+    ValueTraits<Value>::relocateMany(dstElems.data(), srcElems.data(), srcElems.size());
 }
 
 void processBase(const TaskData &task) {
     Span<Value> srcElems = task.shared_->elemsSpans_[task.world_].subspan(task.first_, task.len_);
     smallSort(srcElems);
 
-    if (task.world_ == 0)
-        return;
-
-    Span<Value> dstElems = task.shared_->elemsSpans_[task.world_ ^ 1].subspan(task.first_, task.len_);
-    ValueTraits<Value>::relocateMany(dstElems.data(), srcElems.data(), srcElems.size());
+    copyBack(task);
 }
 
 void processRecursive(TaskData task) {
@@ -480,14 +497,22 @@ void processRecursive(TaskData task) {
     subTask.shared_ = task.shared_;
     subTask.world_ = task.world_ ^ 1;
     subTask.numWorkers_ = (task.numWorkers_ + numBuckets - 1) / numBuckets;
-    for (size_t t = 0; t < numBuckets; t++) {
-        subTask.first_ = task.first_ + splits[t];
-        subTask.len_ = splits[t + 1] - splits[t];
+    for (size_t b = 0; b < numBuckets; b++) {
+        subTask.first_ = task.first_ + splits[b];
+        subTask.len_ = splits[b + 1] - splits[b];
+        if (subTask.len_ == 0)
+            continue;
+        if (b > 0 && b < numBuckets - 1 && perThread->pivot_.sorted_[b - 1] == perThread->pivot_.sorted_[b]) {
+            for (size_t i = splits[b]; i < splits[b + 1]; i++)
+                assert(dstElems[i] == perThread->pivot_.sorted_[b]);
+            copyBack(subTask);
+            continue;
+        }
         if (subTask.len_ <= SMALLSORT_MAX) {
             processBase(subTask);
             continue;
         }
-        if (t == 0)
+        if (b == 0)
             subTask.random_ = task.random_;
         else
             subTask.random_.initStream(task.shared_->randomSeed_, subTask.first_);
