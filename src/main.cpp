@@ -38,7 +38,10 @@ std::vector<uint64_t> readBinFile(const char *filename) {
 #define UNCACHED_MININPUT_BYTES (1 << 20)
 #define UNCACHED_BUFFER_BYTES (1 << 10)
 
-bool isPot(size_t x) {
+#define FORCEINLINE __attribute__((always_inline)) inline
+#define NOINLINE __attribute__((noinline))
+
+FORCEINLINE bool isPot(size_t x) {
     return (x & (x - 1)) == 0;
 }
 
@@ -79,30 +82,30 @@ template<class Lambda> void parallelWorkers(size_t numWorkers, Lambda&& lambda) 
 // requirements:
 //   lifetime methods must not throw...
 template<class T> struct ValueTraits {
-    static inline void relocateOne(T &dst, T &src) noexcept {
+    static FORCEINLINE void relocateOne(T &dst, T &src) noexcept {
         new(&dst) T(static_cast<T&&>(src));
         src.~T();
     }
-    static inline void destroyOne(T &dst) noexcept {
+    static FORCEINLINE void destroyOne(T &dst) noexcept {
         dst.~T();
     }
-    static inline void constructCopyOne(T &dst, const T &src) noexcept {
+    static FORCEINLINE void constructCopyOne(T &dst, const T &src) noexcept {
         new(&dst) T(src);
     }
-    static inline void swapOne(T &dst, T &src) noexcept {
+    static FORCEINLINE void swapOne(T &dst, T &src) noexcept {
         std::swap(dst, src);
     }
-    static inline void constructDefaultOne(T &dst) noexcept {
+    static FORCEINLINE void constructDefaultOne(T &dst) noexcept {
         static_assert(std::is_integral_v<T>); // never used for elements
         new(&dst) T;
     }
 
-    static void relocateMany(T *dst, T *src, size_t n) noexcept {
+    static NOINLINE void relocateMany(T *dst, T *src, size_t n) noexcept {
         assert(dst >= src + n || src >= dst + n);
         for (size_t i = 0; i < n; i++)
             relocateOne(dst[i], src[i]);
     }
-    static void relocateManyUncached(T *dst, T *src, size_t n) noexcept {
+    static NOINLINE void relocateManyUncached(T *dst, T *src, size_t n) noexcept {
         assert(dst >= src + n || src >= dst + n);
         char *bdst = reinterpret_cast<char*>(dst);
         const char *bsrc = reinterpret_cast<const char*>(src);
@@ -125,11 +128,11 @@ template<class T> struct ValueTraits {
             bn--;
         }
     }
-    static void destroyMany(T *dst, size_t n) noexcept {
+    static NOINLINE void destroyMany(T *dst, size_t n) noexcept {
         for (size_t i = 0; i < n; i++)
             destroyOne(dst[i]);
     }
-    static void constructDefaultMany(T *dst, size_t n) noexcept {
+    static NOINLINE void constructDefaultMany(T *dst, size_t n) noexcept {
         for (size_t i = 0; i < n; i++)
             constructDefaultOne(dst[i]);
     }
@@ -154,25 +157,25 @@ template<class T> class Span {
     size_t num_ = 0;
 
 public:
-    Span() = default;
-    inline Span(T *ptr, size_t num)
+    FORCEINLINE Span() = default;
+    FORCEINLINE Span(T *ptr, size_t num)
         : ptr_(ptr)
         , num_(num)
     {}
     template<class U, std::enable_if_t<std::is_same_v<U, std::add_const_t<T>>, int> = 0>
-    inline operator Span<U>() const {
+    FORCEINLINE operator Span<U>() const {
         return {ptr_, num_};
     }
 
-    inline T *data() const { return ptr_; }
-    inline size_t size() const { return num_; }
+    FORCEINLINE T *data() const { return ptr_; }
+    FORCEINLINE size_t size() const { return num_; }
 
-    inline T &operator[] (size_t i) const {
+    FORCEINLINE T &operator[] (size_t i) const {
         assert(i < num_);
         return ptr_[i];
     }
 
-    inline Span<T> subspan(size_t start, size_t len) const {
+    FORCEINLINE Span<T> subspan(size_t start, size_t len) const {
         assert(start + len <= num_);
         return {ptr_ + start, len};
     }
@@ -183,7 +186,7 @@ template<class T> class Array {
     size_t num_ = 0;
     size_t cap_ = 0;
 
-    void grow(size_t n) {
+    NOINLINE void grow(size_t n) {
         assert(n > cap_);
         assert(num_ == 0);
         n = std::max(n, 2 * cap_ + 1);
@@ -216,20 +219,20 @@ public:
         ValueTraits<T>::constructDefaultMany(ptr_, num_);
     }
 
-    inline void pushBack(const T& x) {
+    FORCEINLINE void pushBack(const T& x) {
         assert(num_ < cap_);
         ValueTraits<T>::constructCopyOne(ptr_[num_++], x);
     }
 
-    inline T *data() { return ptr_; }
-    inline const T *data() const { return ptr_; }
-    inline size_t size() const { return num_; }
+    FORCEINLINE T *data() { return ptr_; }
+    FORCEINLINE const T *data() const { return ptr_; }
+    FORCEINLINE size_t size() const { return num_; }
 
-    inline T &operator[] (size_t i) {
+    FORCEINLINE T &operator[] (size_t i) {
         assert(i < num_);
         return ptr_[i];
     }
-    inline const T &operator[] (size_t i) const {
+    FORCEINLINE const T &operator[] (size_t i) const {
         assert(i < num_);
         return ptr_[i];
     }
@@ -338,7 +341,7 @@ struct MultiPivot {
         numBits_ = numBits;        
     }
 
-    inline size_t classifyOne(const Value &value) const {
+    FORCEINLINE size_t classifyOne(const Value &value) const {
         size_t res = 0;
         Span<const Value> tree = makeSpan(tree_);
         for (size_t b = 0; b < numBits_; b++) {
@@ -355,7 +358,7 @@ struct MultiPivot {
         return res;
     }
 
-    template<size_t N> inline void classifyBlock(const Value *value, size_t *res) const {
+    template<size_t N> FORCEINLINE void classifyBlock(const Value *value, size_t *res) const {
         Span<const Value> tree = makeSpan(tree_);
         for (size_t i = 0; i < N; i++)
             res[i] = 0;
