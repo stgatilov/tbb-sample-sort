@@ -35,6 +35,8 @@ std::vector<uint64_t> readBinFile(const char *filename) {
 
 #define CLASSIFY_UNROLL 8
 #define SMALLSORT_MAX 32
+#define UNCACHED_MININPUT_BYTES (1 << 20)
+#define UNCACHED_BUFFER_BYTES (1 << 10)
 
 bool isPot(size_t x) {
     return (x & (x - 1)) == 0;
@@ -99,6 +101,29 @@ template<class T> struct ValueTraits {
         assert(dst >= src + n || src >= dst + n);
         for (size_t i = 0; i < n; i++)
             relocateOne(dst[i], src[i]);
+    }
+    static void relocateManyUncached(T *dst, T *src, size_t n) noexcept {
+        assert(dst >= src + n || src >= dst + n);
+        char *bdst = reinterpret_cast<char*>(dst);
+        const char *bsrc = reinterpret_cast<const char*>(src);
+        size_t bn = n * sizeof(T);
+        while (bn > 0 && size_t(bdst) % 64) {
+            *bdst++ = *bsrc++;
+            bn--;
+        }
+        while (bn >= 64) {
+            _mm_stream_si128((__m128i*)(bdst + 0), _mm_loadu_si128((__m128i*)(bsrc + 0)));
+            _mm_stream_si128((__m128i*)(bdst + 16), _mm_loadu_si128((__m128i*)(bsrc + 16)));
+            _mm_stream_si128((__m128i*)(bdst + 32), _mm_loadu_si128((__m128i*)(bsrc + 32)));
+            _mm_stream_si128((__m128i*)(bdst + 48), _mm_loadu_si128((__m128i*)(bsrc + 48)));
+            bdst += 64;
+            bsrc += 64;
+            bn -= 64;
+        }
+        while (bn > 0) {
+            *bdst++ = *bsrc++;
+            bn--;
+        }
     }
     static void destroyMany(T *dst, size_t n) noexcept {
         for (size_t i = 0; i < n; i++)
@@ -429,15 +454,53 @@ void multiPartition(
         assert(tsum == globalHisto[b + 1]);
     }
     
-    parallelWorkers(numWorkers, [&](size_t t) {
-        size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
-        size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
-        for (size_t i = l; i < r; i++) {
-            size_t b = bucketOf[i];
-            size_t &pos = localHisto[t][b];
-            ValueTraits<Value>::relocateOne(dstElems[pos++], srcElems[i]);
-        }
-    });
+    bool scatterSimple = true;
+#ifdef UNCACHED_MININPUT_BYTES
+    if (numElems * sizeof(Value) > UNCACHED_MININPUT_BYTES) {
+        scatterSimple = false;
+        parallelWorkers(numWorkers, [&](size_t t) {
+            size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
+            size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
+
+            alignas(Value) char buffer[256][UNCACHED_BUFFER_BYTES];
+            static_assert(sizeof(Value) <= UNCACHED_BUFFER_BYTES);
+            
+            uint32_t bufCnt[256];
+            for (size_t b = 0; b < numBuckets; b++)
+                bufCnt[b] = 0;
+
+            for (size_t i = l; i < r; i++) {
+                size_t b = bucketOf[i];
+                ValueTraits<Value>::relocateOne(((Value*)buffer[b])[bufCnt[b]++], srcElems[i]);
+                if (bufCnt[b] == UNCACHED_BUFFER_BYTES / sizeof(Value)) {
+                    size_t &pos = localHisto[t][b];
+                    ValueTraits<Value>::relocateManyUncached(&dstElems[pos], ((Value*)buffer[b]), bufCnt[b]);
+                    pos += bufCnt[b];
+                    bufCnt[b] = 0;
+                }
+            }
+
+            for (size_t b = 0; b < numBuckets; b++) {
+                if (bufCnt[b] == 0)
+                    continue;
+                size_t &pos = localHisto[t][b];
+                ValueTraits<Value>::relocateMany(&dstElems[pos], ((Value*)buffer[b]), bufCnt[b]);
+                pos += bufCnt[b];
+            }
+        });
+    }
+#endif
+    if (scatterSimple) {
+        parallelWorkers(numWorkers, [&](size_t t) {
+            size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
+            size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
+            for (size_t i = l; i < r; i++) {
+                size_t b = bucketOf[i];
+                size_t &pos = localHisto[t][b];
+                ValueTraits<Value>::relocateOne(dstElems[pos++], srcElems[i]);
+            }
+        });
+    }
 
     splits.clearReserve(numBuckets + 1);
     for (size_t b = 0; b <= numBuckets; b++)
