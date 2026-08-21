@@ -306,8 +306,7 @@ struct MultiPivot {
         assert(res == numBuckets_ - 1 || (value < sorted_[res]));
         assert(res == 0 || !(value < sorted_[res - 1]));
 
-        if (res > 0 && value == sorted_[res - 1])
-            res--;
+        res -= (res > 0 && value == sorted_[res - 1]);
         assert(res < numBuckets_);
         return res;
     }
@@ -324,8 +323,7 @@ struct MultiPivot {
         }
         for (size_t i = 0; i < N; i++) {
             res[i] -= (numBuckets_ - 1);
-            if (res[i] > 0 && value[i] == sorted_[res[i] - 1])
-                res[i]--;
+            res[i] -= (res[i] > 0 && value[i] == sorted_[res[i] - 1]);
         }
     }
 };
@@ -509,6 +507,9 @@ void processRecursive(TaskData task) {
             continue;
         }
         if (subTask.len_ <= SMALLSORT_MAX) {
+#if COLLECT_STATS
+            shared->sizeStats_[log2up(subTask.len_)].fetch_add(1, std::memory_order_relaxed);
+#endif
             processBase(subTask);
             continue;
         }
