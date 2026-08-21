@@ -274,19 +274,18 @@ void quickSort(Span<Value> arr, Random &random) {
     if (arr[idxC] < arr[idxA]) ValueTraits<Value>::swapOne(arr[idxA], arr[idxC]);
     if (arr[idxC] < arr[idxB]) ValueTraits<Value>::swapOne(arr[idxB], arr[idxC]);
 
-    Value pivot = arr[idxB];    // constructCopyOne
+    ValueTraits<Value>::swapOne(arr[arr.size() - 1], arr[idxB]);
+    const Value &pivot = arr[arr.size() - 1];
 
     ptrdiff_t l = -1;
-    ptrdiff_t r = arr.size();
+    ptrdiff_t r = arr.size() - 1;
     while (1) {
         do { l++; } while (arr[l] < pivot);
         do { r--; } while (pivot < arr[r]);
         if (l >= r) break;
         ValueTraits<Value>::swapOne(arr[l], arr[r]);
     }
- 
-    if (r < arr.size() - 1)
-        r++;
+    r++;
 
     assert(r > 0 && r < arr.size());
     quickSort(arr.subspan(0, r), random);
