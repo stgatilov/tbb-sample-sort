@@ -110,6 +110,19 @@ template<class T> struct ValueTraits {
     }
 };
 
+template<class T> struct Allocator {
+    static T *allocate(size_t n) {
+        if (!n)
+            return nullptr;
+        return (T*) operator new[] (n * sizeof(T), std::align_val_t(alignof(T)));
+    }
+    static void deallocate(T *ptr) {
+        if (!ptr)
+            return;
+        operator delete[] (ptr);
+    }
+};
+
 // because I need this to work on C++17
 template<class T> class Span {
     T *ptr_ = nullptr;
@@ -140,8 +153,6 @@ public:
     }
 };
 
-// simple reusable array of raw memory
-// elements lifetime management is external
 template<class T> class Array {
     T *ptr_ = nullptr;
     size_t num_ = 0;
@@ -149,20 +160,41 @@ template<class T> class Array {
 
     void grow(size_t n) {
         assert(n > cap_);
+        assert(num_ == 0);
         n = std::max(n, 2 * cap_ + 1);
-        if (cap_ > 0)
-            operator delete[] (ptr_);
-        if (n > 0)
-            ptr_ = (T*) operator new[] (n * sizeof(T), std::align_val_t(alignof(T)));
+        Allocator<T>::deallocate(ptr_);
+        ptr_ = Allocator<T>::allocate(n);
         cap_ = n;
     }
 
 public:
     ~Array() {
-        if (cap_ > 0)
-            operator delete[] (ptr_);
+        clear();
+        Allocator<T>::deallocate(ptr_);
     }
     Array() = default;
+
+    void clear() {
+        ValueTraits<T>::destroyMany(ptr_, num_);
+        num_ = 0;
+    }
+
+    void clearReserve(size_t n) {
+        clear();
+        if (n > cap_)
+            grow(n);
+    }
+
+    void clearResize(size_t n) {
+        clearReserve(n);
+        num_ = n;
+        ValueTraits<T>::constructDefaultMany(ptr_, num_);
+    }
+
+    inline void pushBack(const T& x) {
+        assert(num_ < cap_);
+        ValueTraits<T>::constructCopyOne(ptr_[num_++], x);
+    }
 
     inline T *data() { return ptr_; }
     inline const T *data() const { return ptr_; }
@@ -175,12 +207,6 @@ public:
     inline const T &operator[] (size_t i) const {
         assert(i < num_);
         return ptr_[i];
-    }
-
-    void resize(size_t n) {
-        if (n > cap_)
-            grow(n);
-        num_ = n;
     }
 
     Array(const Array&) = delete;
@@ -222,23 +248,19 @@ void quickSort(Span<Value> arr, Random &random) {
     if (arr[idxC] < arr[idxA]) ValueTraits<Value>::swapOne(arr[idxA], arr[idxC]);
     if (arr[idxC] < arr[idxB]) ValueTraits<Value>::swapOne(arr[idxB], arr[idxC]);
 
-    alignas(Value) char buffer[sizeof(Value)];
-    Value *pivot = (Value*)buffer;
-    ValueTraits<Value>::constructCopyOne(*pivot, arr[idxB]);
+    Value pivot = arr[idxB];    // constructCopyOne
 
     ptrdiff_t l = -1;
     ptrdiff_t r = arr.size();
     while (1) {
-        do { l++; } while (arr[l] < *pivot);
-        do { r--; } while (*pivot < arr[r]);
+        do { l++; } while (arr[l] < pivot);
+        do { r--; } while (pivot < arr[r]);
         if (l >= r) break;
         ValueTraits<Value>::swapOne(arr[l], arr[r]);
     }
  
     if (r < arr.size() - 1)
         r++;
-
-    ValueTraits<Value>::destroyOne(*pivot);
 
     assert(r > 0 && r < arr.size());
     quickSort(arr.subspan(0, r), random);
@@ -256,7 +278,7 @@ struct MultiPivot {
 
     void select(
         Span<const Value> arr, size_t numBuckets,
-        Random &random, Array<Value> &samplesStore
+        Random &random, Array<Value> &samples
     ) {
         assert(isPot(numBuckets) && numBuckets >= 2);
         size_t numElems = arr.size();
@@ -264,30 +286,27 @@ struct MultiPivot {
         size_t numSamples = numBuckets * log2up(numElems) / 5;
         numSamples = std::max(numSamples, numBuckets);
 
-        samplesStore.resize(numSamples);
-        Span<Value> samples = makeSpan(samplesStore);
+        samples.clearReserve(numSamples);
         for (size_t i = 0; i < numSamples; i++) {
             size_t index = random.generate(numElems);
-            ValueTraits<Value>::constructCopyOne(samples[i], arr[index]);
+            samples.pushBack(arr[index]);
         }
 
-        quickSort(samples, random);
+        quickSort(makeSpan(samples), random);
 
-        sorted_.resize(numBuckets - 1);
+        sorted_.clearReserve(numBuckets - 1);
         for (size_t i = 1; i <= numBuckets - 1; i++) {
             uint64_t pos = uint64_t(numSamples) * i / numBuckets;
-            ValueTraits<Value>::constructCopyOne(sorted_[i - 1], samples[pos]);
+            sorted_.pushBack(samples[pos]);
         }
-        ValueTraits<Value>::destroyMany(samples.data(), samples.size());
 
         size_t numBits = log2up(numBuckets);
 
-        tree_.resize(numBuckets - 1);
-        size_t v = 0;
+        tree_.clearReserve(numBuckets - 1);
         for (int b = numBits - 1; b >= 0; b--) {
             size_t len = (1 << b);
             for (size_t i = len - 1; i < numBuckets; i += len * 2)
-                ValueTraits<Value>::constructCopyOne(tree_[v++], sorted_[i]);
+                tree_.pushBack(sorted_[i]);
         }
 
         numBuckets_ = numBuckets;
@@ -349,7 +368,7 @@ struct TaskData {
 struct SharedData {
     size_t numElems_ = 0;
     Span<Value> elemsSpans_[2];
-    Array<Value> elemsCopyStore_;
+    std::unique_ptr<Value[], decltype(&Allocator<Value>::deallocate)> elemsCopyStore_{nullptr, Allocator<Value>::deallocate};
 
     Array<uint8_t> bucketIndexStore_;
 
@@ -362,12 +381,11 @@ struct SharedData {
 
 void multiPartition(
     Span<Value> srcElems, const MultiPivot &pivot,
-    Span<Value> dstElems, Span<size_t> splits, 
+    Span<Value> dstElems, Array<size_t> &splits, 
     size_t numWorkers, Span<uint8_t> bucketOf
 ) {
     size_t numBuckets = pivot.numBuckets_;
     size_t numElems = srcElems.size();
-    assert(splits.size() == numBuckets + 1);
     
     std::vector<std::vector<size_t>> localHisto(numWorkers, std::vector<size_t>(numBuckets, 0));
     parallelWorkers(numWorkers, [&](size_t t) {
@@ -421,8 +439,9 @@ void multiPartition(
         }
     });
 
+    splits.clearReserve(numBuckets + 1);
     for (size_t b = 0; b <= numBuckets; b++)
-        splits[b] = globalHisto[b];
+        splits.pushBack(globalHisto[b]);
 
 #if SLOW_ASSERT
     assert(splits[0] == 0 && splits[numBuckets] == numElems);
@@ -483,10 +502,9 @@ void processRecursive(TaskData task) {
 
     perThread->pivot_.select(srcElems, numBuckets, task.random_, perThread->samplesStore_);
 
-    perThread->splitsStore_.resize(numBuckets + 1);
     multiPartition(
         srcElems, perThread->pivot_,
-        dstElems, makeSpan(perThread->splitsStore_),
+        dstElems, perThread->splitsStore_,
         task.numWorkers_, bucketOf
     );
 
@@ -530,12 +548,11 @@ void sampleSort(Value *begin, size_t num) {
     }
 
     SharedData shared;
-    shared.elemsCopyStore_.resize(num);
-    shared.bucketIndexStore_.resize(num);
-    ValueTraits<uint8_t>::constructDefaultMany(shared.bucketIndexStore_.data(), shared.bucketIndexStore_.size());
+    shared.elemsCopyStore_.reset(Allocator<Value>::allocate(num));
+    shared.bucketIndexStore_.clearResize(num);
     shared.numElems_ = num;
     shared.elemsSpans_[0] = {begin, num};
-    shared.elemsSpans_[1] = makeSpan(shared.elemsCopyStore_);
+    shared.elemsSpans_[1] = {shared.elemsCopyStore_.get(), num};
 
     TaskData task;
     task.shared_ = &shared;
@@ -548,8 +565,6 @@ void sampleSort(Value *begin, size_t num) {
     shared.taskGroup_.run_and_wait([&task] {
         processRecursive(task);
     });
-
-    ValueTraits<uint8_t>::destroyMany(shared.bucketIndexStore_.data(), shared.bucketIndexStore_.size());
 
 #if COLLECT_STATS
     for (int i = 1; i < 32; i++)
