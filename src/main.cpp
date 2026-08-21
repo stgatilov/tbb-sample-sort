@@ -110,10 +110,11 @@ template<class T> struct ValueTraits {
         char *bdst = reinterpret_cast<char*>(dst);
         const char *bsrc = reinterpret_cast<const char*>(src);
         size_t bn = n * sizeof(T);
-        while (bn > 0 && size_t(bdst) % 64) {
-            *bdst++ = *bsrc++;
-            bn--;
-        }
+        size_t prefix = std::min(64 - size_t(bdst) % 64, bn);
+        memcpy(bdst, bsrc, prefix);
+        bdst += prefix;
+        bsrc += prefix;
+        bn -= prefix;
         while (bn >= 64) {
             _mm_stream_si128((__m128i*)(bdst + 0), _mm_loadu_si128((__m128i*)(bsrc + 0)));
             _mm_stream_si128((__m128i*)(bdst + 16), _mm_loadu_si128((__m128i*)(bsrc + 16)));
@@ -123,10 +124,7 @@ template<class T> struct ValueTraits {
             bsrc += 64;
             bn -= 64;
         }
-        while (bn > 0) {
-            *bdst++ = *bsrc++;
-            bn--;
-        }
+        memcpy(bdst, bsrc, bn);
     }
     static NOINLINE void destroyMany(T *dst, size_t n) noexcept {
         for (size_t i = 0; i < n; i++)
