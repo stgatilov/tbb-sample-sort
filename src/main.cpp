@@ -31,7 +31,7 @@ std::vector<uint64_t> readBinFile(const char *filename) {
 //#define SLOW_ASSERT 1
 //#define REDUCE_BITS 40
 //#define TBB_FORCE_THREADS 1
-#define COLLECT_STATS 1
+//#define COLLECT_STATS 1
 
 #define CLASSIFY_UNROLL 8
 #define SMALLSORT_MAX 32
