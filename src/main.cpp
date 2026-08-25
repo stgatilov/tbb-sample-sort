@@ -299,23 +299,20 @@ struct MultiPivot {
     Array<Value> sorted_;
     Array<Value> tree_;
 
-    void select(
-        Span<const Value> arr, size_t numBuckets,
-        Random &random, Array<Value> &samples
-    ) {
+    void select(Span<Value> arr, size_t numBuckets, Random &random) {
         assert(isPot(numBuckets) && numBuckets >= 2);
         size_t numElems = arr.size();
 
         size_t numSamples = numBuckets * log2up(numElems) / 5;
         numSamples = std::max(numSamples, numBuckets);
 
-        samples.clearReserve(numSamples);
         for (size_t i = 0; i < numSamples; i++) {
-            size_t index = random.generate(numElems);
-            samples.pushBack(arr[index]);
+            size_t index = i + random.generate(numElems - i);
+            ValueTraits<Value>::swapOne(arr[i], arr[index]);
         }
 
-        quickSort(makeSpan(samples));
+        Span<Value> samples = arr.subspan(0, numSamples);
+        quickSort(samples);
 
         sorted_.clearReserve(numBuckets - 1);
         for (size_t i = 1; i <= numBuckets - 1; i++) {
@@ -374,7 +371,6 @@ struct SharedData;
 
 struct ThreadData {
     Array<size_t> splitsStore_;
-    Array<Value> samplesStore_;
     MultiPivot pivot_;
 };
 
@@ -561,7 +557,7 @@ void processRecursive(TaskData task) {
         numBuckets = std::min<size_t>(numBuckets, 256);
     }
 
-    perThread->pivot_.select(srcElems, numBuckets, task.random_, perThread->samplesStore_);
+    perThread->pivot_.select(srcElems, numBuckets, task.random_);
 
     multiPartition(
         srcElems, perThread->pivot_,
