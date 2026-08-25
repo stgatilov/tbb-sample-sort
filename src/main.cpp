@@ -260,36 +260,34 @@ void smallSort(Span<Value> arr) {
 #endif
 }
 
-void quickSort(Span<Value> arr, Random &random) {
+// arr is used for samples, so it is already random-shuffled
+void quickSort(Span<Value> arr) {
 #if 0
     std::sort(arr.data(), arr.data() + arr.size());
 #else
     if (arr.size() <= SMALLSORT_MAX)
         return smallSort(arr);
 
-    size_t idxA = random.generate(arr.size());
-    size_t idxB = random.generate(arr.size());
-    size_t idxC = random.generate(arr.size());
-    if (arr[idxB] < arr[idxA]) ValueTraits<Value>::swapOne(arr[idxA], arr[idxB]);
-    if (arr[idxC] < arr[idxA]) ValueTraits<Value>::swapOne(arr[idxA], arr[idxC]);
-    if (arr[idxC] < arr[idxB]) ValueTraits<Value>::swapOne(arr[idxB], arr[idxC]);
+    const size_t q = arr.size() - 1;
+    if (arr[1] < arr[0]) ValueTraits<Value>::swapOne(arr[1], arr[0]);
+    if (arr[q] < arr[0]) ValueTraits<Value>::swapOne(arr[q], arr[0]);
+    if (arr[q] < arr[1]) ValueTraits<Value>::swapOne(arr[q], arr[1]);
+    assert(arr[0] <= arr[1] && arr[1] <= arr[q]);
+    const Value &pivot = arr[1];
 
-    ValueTraits<Value>::swapOne(arr[arr.size() - 1], arr[idxB]);
-    const Value &pivot = arr[arr.size() - 1];
-
-    ptrdiff_t l = -1;
-    ptrdiff_t r = arr.size() - 1;
+    size_t l = 1;
+    size_t r = arr.size() - 1;
     while (1) {
         do { l++; } while (arr[l] < pivot);
         do { r--; } while (pivot < arr[r]);
         if (l >= r) break;
         ValueTraits<Value>::swapOne(arr[l], arr[r]);
     }
-    r++;
+    size_t m = r + 1;
+    assert(m > 0 && m < arr.size());
 
-    assert(r > 0 && r < arr.size());
-    quickSort(arr.subspan(0, r), random);
-    quickSort(arr.subspan(r, arr.size() - r), random);
+    quickSort(arr.subspan(0, m));
+    quickSort(arr.subspan(m, arr.size() - m));
 
     assert(std::is_sorted(arr.data(), arr.data() + arr.size()));
 #endif
@@ -317,7 +315,7 @@ struct MultiPivot {
             samples.pushBack(arr[index]);
         }
 
-        quickSort(makeSpan(samples), random);
+        quickSort(makeSpan(samples));
 
         sorted_.clearReserve(numBuckets - 1);
         for (size_t i = 1; i <= numBuckets - 1; i++) {
