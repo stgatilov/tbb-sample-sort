@@ -309,7 +309,7 @@ struct MultiPivot {
     Array<Value> sorted_;
     Array<Value> tree_;
 
-    void select(Span<Value> arr, size_t numBuckets, Random &random) {
+    static size_t selectSamples(Span<Value> arr, size_t numBuckets, Random &random) {
         assert(isPot(numBuckets) && numBuckets >= 2);
         size_t numElems = arr.size();
 
@@ -321,8 +321,11 @@ struct MultiPivot {
             ValueTraits<Value>::swapOne(arr[i], arr[index]);
         }
 
-        Span<Value> samples = arr.subspan(0, numSamples);
-        quickSort(samples);
+        return numSamples;
+    }
+
+    void initFromSortedSamples(Span<Value> samples, size_t numBuckets) {
+        size_t numSamples = samples.size();
 
         sorted_.clearReserve(numBuckets - 1);
         for (size_t i = 1; i <= numBuckets - 1; i++) {
@@ -548,7 +551,6 @@ void processBase(const TaskData &task) {
 
 void processRecursive(TaskData task) {
     SharedData *shared = task.shared_;
-    ThreadData *perThread = &shared->perThread_.local();
 
     Span<Value> srcElems = shared->elemsSpans_[task.world_].subspan(task.first_, task.len_);
     Span<Value> dstElems = shared->elemsSpans_[task.world_ ^ 1].subspan(task.first_, task.len_);
@@ -574,7 +576,12 @@ void processRecursive(TaskData task) {
     }
     assert(numBuckets >= 2 && numBuckets <= 256 && isPot(numBuckets));
 
-    perThread->pivot_.select(srcElems, numBuckets, task.random_);
+    size_t numSamples = MultiPivot::selectSamples(srcElems, numBuckets, task.random_);
+    
+    quickSort(srcElems.subspan(0, numSamples));
+
+    ThreadData *perThread = &shared->perThread_.local();
+    perThread->pivot_.initFromSortedSamples(srcElems.subspan(0, numSamples), numBuckets);
 
     multiPartition(
         srcElems, perThread->pivot_,
