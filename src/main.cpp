@@ -556,6 +556,7 @@ void processRecursive(TaskData task) {
         numBuckets = 1 << logb;
         numBuckets = std::min<size_t>(numBuckets, 256);
     }
+    assert(numBuckets >= 2 && numBuckets <= 256 && isPot(numBuckets));
 
     perThread->pivot_.select(srcElems, numBuckets, task.random_);
 
@@ -599,7 +600,7 @@ void processRecursive(TaskData task) {
 }
 
 void sampleSort(Value *begin, size_t num) {
-    if (num < SMALLSORT_MAX) {
+    if (num <= SMALLSORT_MAX) {
         smallSort({begin, num});
         return;
     }
