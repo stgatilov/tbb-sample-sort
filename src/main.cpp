@@ -545,13 +545,13 @@ void processRecursive(TaskData task) {
 #endif
 
     size_t numBuckets;
-    if (task.len_ <= 4096) {
-        // one level: aim for 16 elements per bucket
+    if (task.len_ <= (1 << 12)) {
+        // one level: aim for 8-16 elements per bucket
         size_t logb = logn - 4;
         numBuckets = 1 << logb;
     }
     else {
-        // two levels: aim for 16 elements per bucket
+        // two levels: aim for 8-16 elements per bucket
         size_t logb = (logn - 4) / 2;
         numBuckets = 1 << logb;
         numBuckets = std::min<size_t>(numBuckets, 256);
