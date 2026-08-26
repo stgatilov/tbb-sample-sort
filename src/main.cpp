@@ -270,39 +270,6 @@ void smallSort(Span<Value> arr) {
 #endif
 }
 
-// arr is used for samples, so it is already random-shuffled
-void quickSort(Span<Value> arr) {
-#if 0
-    std::sort(arr.data(), arr.data() + arr.size());
-#else
-    if (arr.size() <= SMALLSORT_MAX)
-        return smallSort(arr);
-
-    const size_t q = arr.size() - 1;
-    if (arr[1] < arr[0]) ValueTraits<Value>::swapOne(arr[1], arr[0]);
-    if (arr[q] < arr[0]) ValueTraits<Value>::swapOne(arr[q], arr[0]);
-    if (arr[q] < arr[1]) ValueTraits<Value>::swapOne(arr[q], arr[1]);
-    assert(arr[0] <= arr[1] && arr[1] <= arr[q]);
-    const Value &pivot = arr[1];
-
-    size_t l = 1;
-    size_t r = arr.size() - 1;
-    while (1) {
-        do { l++; } while (arr[l] < pivot);
-        do { r--; } while (pivot < arr[r]);
-        if (l >= r) break;
-        ValueTraits<Value>::swapOne(arr[l], arr[r]);
-    }
-    size_t m = r + 1;
-    assert(m > 0 && m < arr.size());
-
-    quickSort(arr.subspan(0, m));
-    quickSort(arr.subspan(m, arr.size() - m));
-
-    assert(std::is_sorted(arr.data(), arr.data() + arr.size()));
-#endif
-}
-
 struct MultiPivot {
     size_t numBits_ = 0;
     size_t numBuckets_ = 0;
