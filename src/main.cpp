@@ -392,7 +392,7 @@ void multiPartition(
     result.localHisto_.clearZero(numWorkers * numBuckets);
     Span<size_t> localHisto = makeSpan(result.localHisto_);
 
-    parallelWorkers(numWorkers, [&](size_t t) {
+    parallelWorkers(numWorkers, [&pivot, numElems, numBuckets, numWorkers, srcElems, bucketOf, localHisto](size_t t) {
         size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
         size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
         size_t i = l;
@@ -439,7 +439,7 @@ void multiPartition(
 #ifdef UNCACHED_MININPUT_BYTES
     if (numElems * sizeof(Value) > UNCACHED_MININPUT_BYTES) {
         scatterSimple = false;
-        parallelWorkers(numWorkers, [&](size_t t) {
+        parallelWorkers(numWorkers, [numElems, numBuckets, numWorkers, srcElems, dstElems, localHisto, bucketOf](size_t t) {
             size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
             size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
 
@@ -472,7 +472,7 @@ void multiPartition(
     }
 #endif
     if (scatterSimple) {
-        parallelWorkers(numWorkers, [&](size_t t) {
+        parallelWorkers(numWorkers, [numElems, numBuckets, numWorkers, srcElems, dstElems, localHisto, bucketOf](size_t t) {
             size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
             size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
             for (size_t i = l; i < r; i++) {
