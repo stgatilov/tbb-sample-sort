@@ -512,6 +512,7 @@ struct TaskData {
     size_t first_ = 0;
     size_t len_ = 0;
     size_t world_ = 0;
+    size_t whome_ = 0;
     size_t numWorkers_ = 0;
     Random random_;
 
@@ -535,11 +536,11 @@ struct SharedData {
 
 
 void copyBack(const TaskData &task) {
-    if (task.world_ == 0)
+    if (task.world_ == task.whome_)
         return;
 
     Span<Value> srcElems = task.shared_->elemsSpans_[task.world_].subspan(task.first_, task.len_);
-    Span<Value> dstElems = task.shared_->elemsSpans_[task.world_ ^ 1].subspan(task.first_, task.len_);
+    Span<Value> dstElems = task.shared_->elemsSpans_[task.whome_].subspan(task.first_, task.len_);
     ValueTraits<Value>::relocateMany(dstElems.data(), srcElems.data(), srcElems.size());
 }
 
@@ -594,6 +595,7 @@ void processRecursive(TaskData task) {
     TaskData subTask;
     subTask.shared_ = task.shared_;
     subTask.world_ = task.world_ ^ 1;
+    subTask.whome_ = task.whome_;
     subTask.numWorkers_ = (task.numWorkers_ + numBuckets - 1) / numBuckets;
 
     for (size_t b = 0; b < numBuckets; b++) {
@@ -647,6 +649,7 @@ void sampleSort(Value *begin, size_t num) {
     task.len_ = shared.numElems_;
     task.numWorkers_ = tbb::this_task_arena::max_concurrency();
     task.world_ = 0;
+    task.whome_ = 0;
     task.random_.initStream(shared.randomSeed_, task.first_);
 
     shared.taskGroup_.run_and_wait([&task] {
