@@ -516,7 +516,8 @@ struct TaskData {
     size_t numWorkers_ = 0;
     Random random_;
 
-    SharedData* shared_ = nullptr;
+    tbb::task_group *taskGroup_ = nullptr;
+    SharedData *shared_ = nullptr;
 };
 
 struct SharedData {
@@ -527,7 +528,6 @@ struct SharedData {
     Array<uint8_t> bucketIndexStore_;
 
     uint64_t randomSeed_ = 0xDEADBEEF01234567ull;
-    tbb::task_group taskGroup_;
     tbb::enumerable_thread_specific<ThreadData> perThread_;
 #if COLLECT_STATS
     std::atomic_int sizeStats_[64];
@@ -580,8 +580,30 @@ void processRecursive(TaskData task) {
 
     size_t numSamples = MultiPivot::selectSamples(srcElems, numBuckets, task.random_);
 
-    quickSort(srcElems.subspan(0, numSamples));
+    if (numSamples <= SMALLSORT_MAX) {
+#if COLLECT_STATS
+        shared->sizeStats_[log2up(numSamples)].fetch_add(1, std::memory_order_relaxed);
+#endif
+        smallSort(srcElems.subspan(0, numSamples));
+    }
+    else {
+        tbb::task_group subTaskGroup;
+        TaskData samplesTask;
+        samplesTask.shared_ = shared;
+        samplesTask.taskGroup_ = &subTaskGroup;
+        samplesTask.first_ = task.first_;
+        samplesTask.len_ = numSamples;
+        samplesTask.world_ = task.world_;
+        samplesTask.whome_ = task.world_;
+        samplesTask.numWorkers_ = 1;
+        samplesTask.random_ = task.random_;
+        subTaskGroup.run_and_wait([samplesTask] {
+            processRecursive(samplesTask);
+        });
+    }
 
+    // note: we can't use threadlocal data before sorting samples
+    // because the recursive call can overwrite it
     ThreadData *perThread = &shared->perThread_.local();
     perThread->pivot_.initFromSortedSamples(srcElems.subspan(0, numSamples), numBuckets);
 
@@ -594,6 +616,7 @@ void processRecursive(TaskData task) {
 
     TaskData subTask;
     subTask.shared_ = task.shared_;
+    subTask.taskGroup_ = task.taskGroup_;
     subTask.world_ = task.world_ ^ 1;
     subTask.whome_ = task.whome_;
     subTask.numWorkers_ = (task.numWorkers_ + numBuckets - 1) / numBuckets;
@@ -624,7 +647,7 @@ void processRecursive(TaskData task) {
         else
             subTask.random_.initStream(task.shared_->randomSeed_, subTask.first_);
 
-        shared->taskGroup_.run([subTask] {
+        task.taskGroup_->run([subTask] {
             processRecursive(subTask);
         });
     }
@@ -643,8 +666,11 @@ void sampleSort(Value *begin, size_t num) {
     shared.elemsSpans_[0] = {begin, num};
     shared.elemsSpans_[1] = {shared.elemsCopyStore_.get(), num};
 
+    tbb::task_group rootTaskGroup;
+
     TaskData task;
     task.shared_ = &shared;
+    task.taskGroup_ = &rootTaskGroup;
     task.first_ = 0;
     task.len_ = shared.numElems_;
     task.numWorkers_ = tbb::this_task_arena::max_concurrency();
@@ -652,7 +678,7 @@ void sampleSort(Value *begin, size_t num) {
     task.whome_ = 0;
     task.random_.initStream(shared.randomSeed_, task.first_);
 
-    shared.taskGroup_.run_and_wait([&task] {
+    rootTaskGroup.run_and_wait([&task] {
         processRecursive(task);
     });
 
