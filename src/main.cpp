@@ -75,7 +75,10 @@ template<class Lambda> void parallelWorkers(size_t numWorkers, Lambda&& lambda) 
         lambda(0);
     }
     else {
-        tbb::parallel_for<size_t>(0, numWorkers, lambda);
+        // isolation ensures per-thread data is not overwritten
+        tbb::this_task_arena::isolate([&]{
+            tbb::parallel_for<size_t>(0, numWorkers, lambda);
+        });
     }
 }
 
@@ -215,6 +218,12 @@ public:
         clearReserve(n);
         num_ = n;
         ValueTraits<T>::constructDefaultMany(ptr_, num_);
+    }
+
+    void clearZero(size_t n) {
+        static_assert(std::is_integral_v<T>); // never used for elements
+        clearResize(n);
+        memset(ptr_, 0, num_ * sizeof(T));
     }
 
     FORCEINLINE void pushBack(const T& x) {
@@ -367,46 +376,22 @@ struct MultiPivot {
     }
 };
 
-struct SharedData;
-
-struct ThreadData {
-    Array<size_t> splitsStore_;
-    MultiPivot pivot_;
-};
-
-struct TaskData {
-    size_t first_ = 0;
-    size_t len_ = 0;
-    size_t world_ = 0;
-    size_t numWorkers_ = 0;
-    Random random_;
-
-    SharedData* shared_ = nullptr;
-};
-
-struct SharedData {
-    size_t numElems_ = 0;
-    Span<Value> elemsSpans_[2];
-    std::unique_ptr<Value[], decltype(&Allocator<Value>::deallocate)> elemsCopyStore_{nullptr, Allocator<Value>::deallocate};
-
-    Array<uint8_t> bucketIndexStore_;
-
-    uint64_t randomSeed_ = 0xDEADBEEF01234567ull;
-    tbb::task_group taskGroup_;
-#if COLLECT_STATS
-    std::atomic_int sizeStats_[64];
-#endif
+struct PartitionResult {
+    Array<size_t> localHisto_;
+    Array<size_t> splits_;
 };
 
 void multiPartition(
     Span<Value> srcElems, const MultiPivot &pivot,
-    Span<Value> dstElems, Array<size_t> &splits, 
+    Span<Value> dstElems, PartitionResult &result,
     size_t numWorkers, Span<uint8_t> bucketOf
 ) {
     size_t numBuckets = pivot.numBuckets_;
     size_t numElems = srcElems.size();
     
-    std::vector<std::vector<size_t>> localHisto(numWorkers, std::vector<size_t>(numBuckets, 0));
+    result.localHisto_.clearZero(numWorkers * numBuckets);
+    Span<size_t> localHisto = makeSpan(result.localHisto_);
+
     parallelWorkers(numWorkers, [&](size_t t) {
         size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
         size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
@@ -418,21 +403,23 @@ void multiPartition(
             for (size_t q = 0; q < CLASSIFY_UNROLL; q++) {
                 size_t b = bidx[q];
                 bucketOf[i + q] = b;
-                localHisto[t][b]++;
+                localHisto[t * numBuckets + b]++;
             }
         }
 #endif        
         for (; i < r; i++) {
             size_t b = pivot.classifyOne(srcElems[i]);
             bucketOf[i] = b;
-            localHisto[t][b]++;
+            localHisto[t * numBuckets + b]++;
         }
     });
 
-    std::vector<size_t> globalHisto(numBuckets + 1, 0);
+    result.splits_.clearZero(numBuckets + 1);
+    Span<size_t> globalHisto = makeSpan(result.splits_);
+
     for (size_t t = 0; t < numWorkers; t++)
         for (size_t b = 0; b < numBuckets; b++)
-            globalHisto[b + 1] += localHisto[t][b];
+            globalHisto[b + 1] += localHisto[t * numBuckets + b];
 
     for (size_t b = 0; b < numBuckets; b++)
         globalHisto[b + 1] += globalHisto[b];
@@ -441,8 +428,8 @@ void multiPartition(
     for (size_t b = 0; b < numBuckets; b++) {
         size_t tsum = globalHisto[b];
         for (size_t t = 0; t < numWorkers; t++) {
-            size_t nsum = tsum + localHisto[t][b];
-            localHisto[t][b] = tsum;
+            size_t nsum = tsum + localHisto[t * numBuckets + b];
+            localHisto[t * numBuckets + b] = tsum;
             tsum = nsum;
         }
         assert(tsum == globalHisto[b + 1]);
@@ -467,7 +454,7 @@ void multiPartition(
                 size_t b = bucketOf[i];
                 ValueTraits<Value>::relocateOne(((Value*)buffer[b])[bufCnt[b]++], srcElems[i]);
                 if (bufCnt[b] == UNCACHED_BUFFER_BYTES / sizeof(Value)) {
-                    size_t &pos = localHisto[t][b];
+                    size_t &pos = localHisto[t * numBuckets + b];
                     ValueTraits<Value>::relocateManyUncached(&dstElems[pos], ((Value*)buffer[b]), bufCnt[b]);
                     pos += bufCnt[b];
                     bufCnt[b] = 0;
@@ -477,7 +464,7 @@ void multiPartition(
             for (size_t b = 0; b < numBuckets; b++) {
                 if (bufCnt[b] == 0)
                     continue;
-                size_t &pos = localHisto[t][b];
+                size_t &pos = localHisto[t * numBuckets + b];
                 ValueTraits<Value>::relocateMany(&dstElems[pos], ((Value*)buffer[b]), bufCnt[b]);
                 pos += bufCnt[b];
             }
@@ -490,17 +477,14 @@ void multiPartition(
             size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
             for (size_t i = l; i < r; i++) {
                 size_t b = bucketOf[i];
-                size_t &pos = localHisto[t][b];
+                size_t &pos = localHisto[t * numBuckets + b];
                 ValueTraits<Value>::relocateOne(dstElems[pos++], srcElems[i]);
             }
         });
     }
 
-    splits.clearReserve(numBuckets + 1);
-    for (size_t b = 0; b <= numBuckets; b++)
-        splits.pushBack(globalHisto[b]);
-
 #if SLOW_ASSERT
+    Span<const size_t> splits = globalHisto;
     assert(splits[0] == 0 && splits[numBuckets] == numElems);
     for (size_t b = 0; b < numBuckets; b++) {
         assert(splits[b] <= splits[b + 1]);
@@ -511,6 +495,39 @@ void multiPartition(
     }
 #endif    
 }
+
+struct SharedData;
+
+struct ThreadData {
+    MultiPivot pivot_;
+    PartitionResult partition_;
+};
+
+struct TaskData {
+    size_t first_ = 0;
+    size_t len_ = 0;
+    size_t world_ = 0;
+    size_t numWorkers_ = 0;
+    Random random_;
+
+    SharedData* shared_ = nullptr;
+};
+
+struct SharedData {
+    size_t numElems_ = 0;
+    Span<Value> elemsSpans_[2];
+    std::unique_ptr<Value[], decltype(&Allocator<Value>::deallocate)> elemsCopyStore_{nullptr, Allocator<Value>::deallocate};
+
+    Array<uint8_t> bucketIndexStore_;
+
+    uint64_t randomSeed_ = 0xDEADBEEF01234567ull;
+    tbb::task_group taskGroup_;
+    tbb::enumerable_thread_specific<ThreadData> perThread_;
+#if COLLECT_STATS
+    std::atomic_int sizeStats_[64];
+#endif
+};
+
 
 void copyBack(const TaskData &task) {
     if (task.world_ == 0)
@@ -530,9 +547,7 @@ void processBase(const TaskData &task) {
 
 void processRecursive(TaskData task) {
     SharedData *shared = task.shared_;
-    //ThreadData *perThread = &shared->perThread_.local();
-    ThreadData ptd;
-    ThreadData *perThread = &ptd;
+    ThreadData *perThread = &shared->perThread_.local();
 
     Span<Value> srcElems = shared->elemsSpans_[task.world_].subspan(task.first_, task.len_);
     Span<Value> dstElems = shared->elemsSpans_[task.world_ ^ 1].subspan(task.first_, task.len_);
@@ -562,15 +577,16 @@ void processRecursive(TaskData task) {
 
     multiPartition(
         srcElems, perThread->pivot_,
-        dstElems, perThread->splitsStore_,
+        dstElems, perThread->partition_,
         task.numWorkers_, bucketOf
     );
+    Span<const size_t> splits = makeSpan(perThread->partition_.splits_);
 
     TaskData subTask;
-    Span<const size_t> splits = makeSpan(perThread->splitsStore_);
     subTask.shared_ = task.shared_;
     subTask.world_ = task.world_ ^ 1;
     subTask.numWorkers_ = (task.numWorkers_ + numBuckets - 1) / numBuckets;
+
     for (size_t b = 0; b < numBuckets; b++) {
         subTask.first_ = task.first_ + splits[b];
         subTask.len_ = splits[b + 1] - splits[b];
