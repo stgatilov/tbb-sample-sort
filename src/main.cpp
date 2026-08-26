@@ -577,7 +577,7 @@ void processRecursive(TaskData task) {
     assert(numBuckets >= 2 && numBuckets <= 256 && isPot(numBuckets));
 
     size_t numSamples = MultiPivot::selectSamples(srcElems, numBuckets, task.random_);
-    
+
     quickSort(srcElems.subspan(0, numSamples));
 
     ThreadData *perThread = &shared->perThread_.local();
@@ -600,12 +600,14 @@ void processRecursive(TaskData task) {
         subTask.len_ = splits[b + 1] - splits[b];
         if (subTask.len_ == 0)
             continue;
+            
         if (b > 0 && b < numBuckets - 1 && perThread->pivot_.sorted_[b - 1] == perThread->pivot_.sorted_[b]) {
             for (size_t i = splits[b]; i < splits[b + 1]; i++)
                 assert(dstElems[i] == perThread->pivot_.sorted_[b]);
             copyBack(subTask);
             continue;
         }
+
         if (subTask.len_ <= SMALLSORT_MAX) {
 #if COLLECT_STATS
             shared->sizeStats_[log2up(subTask.len_)].fetch_add(1, std::memory_order_relaxed);
@@ -613,10 +615,12 @@ void processRecursive(TaskData task) {
             processBase(subTask);
             continue;
         }
+
         if (b == 0)
             subTask.random_ = task.random_;
         else
             subTask.random_.initStream(task.shared_->randomSeed_, subTask.first_);
+
         shared->taskGroup_.run([subTask] {
             processRecursive(subTask);
         });
