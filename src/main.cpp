@@ -325,6 +325,7 @@ struct MultiPivot {
     }
 
     void initFromSortedSamples(Span<Value> samples, size_t numBuckets) {
+        assert(std::is_sorted(samples.data(), samples.data() + samples.size()));
         size_t numSamples = samples.size();
 
         sorted_.clearReserve(numBuckets - 1);
@@ -600,7 +601,7 @@ void processRecursive(TaskData task) {
         subTask.len_ = splits[b + 1] - splits[b];
         if (subTask.len_ == 0)
             continue;
-            
+
         if (b > 0 && b < numBuckets - 1 && perThread->pivot_.sorted_[b - 1] == perThread->pivot_.sorted_[b]) {
             for (size_t i = splits[b]; i < splits[b + 1]; i++)
                 assert(dstElems[i] == perThread->pivot_.sorted_[b]);
