@@ -223,7 +223,8 @@ public:
     void clearZero(size_t n) {
         static_assert(std::is_integral_v<T>); // never used for elements
         clearResize(n);
-        memset(ptr_, 0, num_ * sizeof(T));
+        for (size_t i = 0; i < num_; i++)
+            ptr_[i] = 0;
     }
 
     FORCEINLINE void pushBack(const T& x) {
