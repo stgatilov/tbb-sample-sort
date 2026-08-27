@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(tbbsamplesort CXX C)
+project(tbbsamplesort CXX)
 
 find_package(TBB REQUIRED)
 
@@ -12,8 +12,7 @@ endif()
 
 add_executable(${PROJECT_NAME}
     src/main.cpp
-    src/pcg_basic.c 
     src/pcg_basic.h
 )
-set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 20)
+set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)
 target_link_libraries(${PROJECT_NAME} onetbb::onetbb)

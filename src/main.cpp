@@ -663,11 +663,11 @@ void sampleSort(Value *begin, size_t num) {
 
 //===============================================
 
-auto getTimestamp() -> auto {
+std::chrono::steady_clock::time_point getTimestamp() {
     return std::chrono::steady_clock::now();
 }
 
-double getTimeDiff(auto a, auto b) {
+double getTimeDiff(std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point b) {
     return std::chrono::duration<double, std::milli>(b - a).count();
 }
 
