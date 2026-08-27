@@ -82,6 +82,28 @@ template<class Lambda> void parallelWorkers(size_t numWorkers, Lambda&& lambda) 
     }
 }
 
+NOINLINE void memcpyUncached(char *dst, const char *src, size_t size) {
+    assert(dst >= src + size || src >= dst + size);
+
+    size_t prefix = std::min(64 - size_t(dst) % 64, size);
+    memcpy(dst, src, prefix);
+    dst += prefix;
+    src += prefix;
+    size -= prefix;
+
+    while (size >= 64) {
+        _mm_stream_si128((__m128i*)(dst + 0), _mm_loadu_si128((__m128i*)(src + 0)));
+        _mm_stream_si128((__m128i*)(dst + 16), _mm_loadu_si128((__m128i*)(src + 16)));
+        _mm_stream_si128((__m128i*)(dst + 32), _mm_loadu_si128((__m128i*)(src + 32)));
+        _mm_stream_si128((__m128i*)(dst + 48), _mm_loadu_si128((__m128i*)(src + 48)));
+        dst += 64;
+        src += 64;
+        size -= 64;
+    }
+
+    memcpy(dst, src, size);    
+}
+
 // requirements:
 //   lifetime methods must not throw...
 template<class T> struct ValueTraits {
@@ -103,37 +125,20 @@ template<class T> struct ValueTraits {
         new(&dst) T;
     }
 
-    static NOINLINE void relocateMany(T *dst, T *src, size_t n) noexcept {
+    static void relocateMany(T *dst, T *src, size_t n) noexcept {
         assert(dst >= src + n || src >= dst + n);
         for (size_t i = 0; i < n; i++)
             relocateOne(dst[i], src[i]);
     }
-    static NOINLINE void relocateManyUncached(T *dst, T *src, size_t n) noexcept {
+    static void relocateManyUncached(T *dst, T *src, size_t n) noexcept {
         assert(dst >= src + n || src >= dst + n);
-        char *bdst = reinterpret_cast<char*>(dst);
-        const char *bsrc = reinterpret_cast<const char*>(src);
-        size_t bn = n * sizeof(T);
-        size_t prefix = std::min(64 - size_t(bdst) % 64, bn);
-        memcpy(bdst, bsrc, prefix);
-        bdst += prefix;
-        bsrc += prefix;
-        bn -= prefix;
-        while (bn >= 64) {
-            _mm_stream_si128((__m128i*)(bdst + 0), _mm_loadu_si128((__m128i*)(bsrc + 0)));
-            _mm_stream_si128((__m128i*)(bdst + 16), _mm_loadu_si128((__m128i*)(bsrc + 16)));
-            _mm_stream_si128((__m128i*)(bdst + 32), _mm_loadu_si128((__m128i*)(bsrc + 32)));
-            _mm_stream_si128((__m128i*)(bdst + 48), _mm_loadu_si128((__m128i*)(bsrc + 48)));
-            bdst += 64;
-            bsrc += 64;
-            bn -= 64;
-        }
-        memcpy(bdst, bsrc, bn);
+        memcpyUncached(reinterpret_cast<char*>(dst), reinterpret_cast<const char*>(src), n * sizeof(T));
     }
-    static NOINLINE void destroyMany(T *dst, size_t n) noexcept {
+    static void destroyMany(T *dst, size_t n) noexcept {
         for (size_t i = 0; i < n; i++)
             destroyOne(dst[i]);
     }
-    static NOINLINE void constructDefaultMany(T *dst, size_t n) noexcept {
+    static void constructDefaultMany(T *dst, size_t n) noexcept {
         for (size_t i = 0; i < n; i++)
             constructDefaultOne(dst[i]);
     }
