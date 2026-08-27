@@ -148,7 +148,8 @@ template<class T> struct Allocator {
     static T *allocate(size_t n) {
         if (!n)
             return nullptr;
-        return (T*) operator new[] (n * sizeof(T), std::align_val_t(alignof(T)));
+        static constexpr size_t Alignment = std::max<size_t>(alignof(T), 64);
+        return (T*) operator new[] (n * sizeof(T), std::align_val_t(Alignment));
     }
     static void deallocate(T *ptr) {
         if (!ptr)
