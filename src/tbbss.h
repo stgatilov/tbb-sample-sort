@@ -86,6 +86,29 @@ struct Random {
 
 void memcpyUncached(char *dst, const char *src, size_t size);
 
+template<class T> TBBSS_FORCEINLINE void memcpyElement(void *dst, const void *src) {
+#if 0
+    memcpy(dst, src, sizeof(T));
+#else
+    // note: unaligned access may happen here
+    for (size_t i = 0; i < sizeof(T) / 8; i++)
+        reinterpret_cast<uint64_t*>(dst)[i] = reinterpret_cast<const uint64_t*>(src)[i];
+
+    if constexpr (sizeof(T) % 8 >= 4) {
+        static constexpr size_t Index = 2 * (sizeof(T) / 8);
+        reinterpret_cast<uint32_t*>(dst)[Index] = reinterpret_cast<const uint32_t*>(src)[Index];
+    }
+    if constexpr (sizeof(T) % 4 >= 2) {
+        static constexpr size_t Index = 2 * (sizeof(T) / 4);
+        reinterpret_cast<uint16_t*>(dst)[Index] = reinterpret_cast<const uint16_t*>(src)[Index];
+    }
+    if constexpr (sizeof(T) % 2 >= 1) {
+        static constexpr size_t Index = 2 * (sizeof(T) / 2);
+        reinterpret_cast<uint8_t*>(dst)[Index] = reinterpret_cast<const uint8_t*>(src)[Index];
+    }
+#endif
+}
+
 // "relocate" is Rust-style move
 // it moves an element into specified raw memory and makes source memory raw
 enum RelocationTrivialness {
@@ -114,7 +137,7 @@ struct DefaultValueTraits {
             src.~T();
         }
         else {
-            memcpy(&dst, &src, sizeof(T));
+            memcpyElement<T>(&dst, &src);
         }
     }
     static TBBSS_FORCEINLINE void swapOne(T &dst, T &src) noexcept {
@@ -125,9 +148,9 @@ struct DefaultValueTraits {
         }
         else {
             alignas(T) char temp[sizeof(T)];
-            memcpy(&temp, &dst, sizeof(T));
-            memcpy(&dst, &src, sizeof(T));
-            memcpy(&src, &temp, sizeof(T));
+            memcpyElement<T>(&temp, &dst);
+            memcpyElement<T>(&dst, &src);
+            memcpyElement<T>(&src, &temp);
         }
     }
 
@@ -137,7 +160,7 @@ struct DefaultValueTraits {
         }
         else {
             // make temporary shallow clone, which shares same internal resources
-            memcpy(&dst, &src, sizeof(T));
+            memcpyElement<T>(&dst, &src);
         }
     }
     static TBBSS_FORCEINLINE void destroyOne(T &dst) noexcept {
