@@ -86,25 +86,67 @@ struct Random {
 
 void memcpyUncached(char *dst, const char *src, size_t size);
 
-// requirements:
-//   lifetime methods must not throw...
-template<class T> struct DefaultValueTraits {
+// "relocate" is Rust-style move
+// it moves an element into specified raw memory and makes source memory raw
+enum RelocationTrivialness {
+    // relocation is done via destructing move: move construct + destroy old
+    // BEWARE: the lifetime methods used must not throw exceptions!
+    // must be used for types that contain self-references
+    // e.g. std::string with small string optimization
+    rtNone = 0,
+    // relocation can be done by memcpy instead of destructing move
+    // is automatically used for trivially copyable types
+    // but it can also be used for std::unique_ptr, std::vector, std::set etc.
+    rtRelocate = 1,
+    // temporary copy of an element can be created using memcpy
+    // such copies are used only to run comparator, and they are NOT destroyed
+    // is automatically used for trivially copyable types
+    // but it can also be used for std::unique_ptr, std::vector, std::set etc.
+    rtFork = 2,
+};
+template<class T> constexpr RelocationTrivialness IsTriviallyRelocatable = (std::is_trivially_copyable_v<T> ? rtFork : rtNone);
+
+template<class T, RelocationTrivialness IsRelocationTrivial = IsTriviallyRelocatable<T>>
+struct DefaultValueTraits {
     static TBBSS_FORCEINLINE void relocateOne(T &dst, T &src) noexcept {
-        new(&dst) T(static_cast<T&&>(src));
-        src.~T();
-    }
-    static TBBSS_FORCEINLINE void destroyOne(T &dst) noexcept {
-        dst.~T();
-    }
-    static TBBSS_FORCEINLINE void constructCopyOne(T &dst, const T &src) noexcept {
-        new(&dst) T(src);
+        if constexpr (IsRelocationTrivial == rtNone) {
+            new(&dst) T(static_cast<T&&>(src));
+            src.~T();
+        }
+        else {
+            memcpy(&dst, &src, sizeof(T));
+        }
     }
     static TBBSS_FORCEINLINE void swapOne(T &dst, T &src) noexcept {
-        std::swap(dst, src);
+        if constexpr (IsRelocationTrivial == rtNone) {
+            T temp = static_cast<T&&>(dst);
+            dst = static_cast<T&&>(src);
+            src = static_cast<T&&>(temp);
+        }
+        else {
+            alignas(T) char temp[sizeof(T)];
+            memcpy(&temp, &dst, sizeof(T));
+            memcpy(&dst, &src, sizeof(T));
+            memcpy(&src, &temp, sizeof(T));
+        }
     }
-    static TBBSS_FORCEINLINE void constructDefaultOne(T &dst) noexcept {
-        static_assert(std::is_integral_v<T>); // never used for elements
-        new(&dst) T;
+
+    static TBBSS_FORCEINLINE void constructCopyOne(T &dst, const T &src) noexcept {
+        if constexpr (IsRelocationTrivial != rtFork) {
+            new(&dst) T(src);
+        }
+        else {
+            // make temporary shallow clone, which shares same internal resources
+            memcpy(&dst, &src, sizeof(T));
+        }
+    }
+    static TBBSS_FORCEINLINE void destroyOne(T &dst) noexcept {
+        if constexpr (IsRelocationTrivial != rtFork) {
+            dst.~T();
+        }
+        else {
+            // only called for destroying shallow clones, so don't call destructor
+        }
     }
 
     static void relocateMany(T *dst, T *src, size_t n) noexcept {
@@ -113,6 +155,8 @@ template<class T> struct DefaultValueTraits {
             relocateOne(dst[i], src[i]);
     }
     static void relocateManyUncached(T *dst, T *src, size_t n) noexcept {
+        if constexpr (IsRelocationTrivial == rtNone)
+            return relocateMany(dst, src, n);
         assert(dst >= src + n || src >= dst + n);
         memcpyUncached(reinterpret_cast<char*>(dst), reinterpret_cast<const char*>(src), n * sizeof(T));
     }
@@ -120,11 +164,15 @@ template<class T> struct DefaultValueTraits {
         for (size_t i = 0; i < n; i++)
             destroyOne(dst[i]);
     }
-    static void constructDefaultMany(T *dst, size_t n) noexcept {
-        for (size_t i = 0; i < n; i++)
-            constructDefaultOne(dst[i]);
-    }
 };
+
+template<class T>
+void constructDefaultMany(T *dst, size_t n) noexcept {
+    // only used for integers internally, never used for sorted user elements
+    static_assert(std::is_integral_v<T>);
+    for (size_t i = 0; i < n; i++)
+        new(&dst[i]) T;
+}
 
 //---------------------------------------------------------
 
@@ -179,7 +227,7 @@ public:
     void clearResize(size_t n) {
         clearReserve(n);
         num_ = n;
-        ValueTraits::constructDefaultMany(ptr_, num_);
+        constructDefaultMany(ptr_, num_);
     }
 
     void clearZero(size_t n) {
