@@ -375,9 +375,14 @@ template<class Value, class Comp, class ValueTraits> void smallSort(Span<Value> 
 #if 0
     std::sort(arr.data(), arr.data() + arr.size(), comp);
 #else
-    for (size_t i = 1; i < arr.size(); i++)
+    alignas(Value) char buffer[sizeof(Value)];
+    for (size_t i = 1; i < arr.size(); i++) {
+        Value &arrI = *reinterpret_cast<Value*>(buffer);
+        ValueTraits::relocateOne(arrI, arr[i]);
         for (size_t j = 0; j < i; j++)
-            ValueTraits::swapConditionalOne(arr[i], arr[j], comp(arr[i], arr[j]));
+            ValueTraits::swapConditionalOne(arrI, arr[j], comp(arrI, arr[j]));
+        ValueTraits::relocateOne(arr[i], arrI);
+    }
 
     assert(std::is_sorted(arr.data(), arr.data() + arr.size(), comp));                
 #endif
