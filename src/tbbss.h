@@ -109,6 +109,45 @@ template<class T> TBBSS_FORCEINLINE void memcpyElement(void *dst, const void *sr
 #endif
 }
 
+template<class T> TBBSS_FORCEINLINE void memswapElementConditional(void *dst, void *src, bool doSwap) {
+    int64_t mask = -int64_t(doSwap);
+
+    // note: unaligned access may happen here
+    for (size_t i = 0; i < sizeof(T) / 8; i++) {
+        uint64_t &a = reinterpret_cast<uint64_t*>(dst)[i];
+        uint64_t &b = reinterpret_cast<uint64_t*>(src)[i];
+        uint64_t delta = (a ^ b) & uint64_t(mask);
+        a ^= delta;
+        b ^= delta;
+    }
+
+    if constexpr (sizeof(T) % 8 >= 4) {
+        static constexpr size_t Index = 2 * (sizeof(T) / 8);
+        uint32_t &a = reinterpret_cast<uint32_t*>(dst)[Index];
+        uint32_t &b = reinterpret_cast<uint32_t*>(src)[Index];
+        uint32_t delta = (a ^ b) & uint32_t(mask);
+        a ^= delta;
+        b ^= delta;
+    }
+    if constexpr (sizeof(T) % 4 >= 2) {
+        static constexpr size_t Index = 2 * (sizeof(T) / 4);
+        uint16_t &a = reinterpret_cast<uint16_t*>(dst)[Index];
+        uint16_t &b = reinterpret_cast<uint16_t*>(src)[Index];
+        uint16_t delta = (a ^ b) & uint16_t(mask);
+        a ^= delta;
+        b ^= delta;
+
+    }
+    if constexpr (sizeof(T) % 2 >= 1) {
+        static constexpr size_t Index = 2 * (sizeof(T) / 2);
+        uint8_t &a = reinterpret_cast<uint8_t*>(dst)[Index];
+        uint8_t &b = reinterpret_cast<uint8_t*>(src)[Index];
+        uint8_t delta = (a ^ b) & uint8_t(mask);
+        a ^= delta;
+        b ^= delta;
+    }
+}
+
 // "relocate" is Rust-style move
 // it moves an element into specified raw memory and makes source memory raw
 enum RelocationTrivialness {
@@ -151,6 +190,16 @@ struct DefaultValueTraits {
             memcpyElement<T>(&temp, &dst);
             memcpyElement<T>(&dst, &src);
             memcpyElement<T>(&src, &temp);
+        }
+    }
+
+    static TBBSS_FORCEINLINE void swapConditionalOne(T &dst, T &src, bool doSwap) noexcept {
+        if constexpr (IsRelocationTrivial == rtNone) {
+            if (doSwap)
+                swapOne(dst, src);
+        }
+        else {
+            memswapElementConditional<T>(&dst, &src, doSwap);
         }
     }
 
@@ -328,8 +377,7 @@ template<class Value, class Comp, class ValueTraits> void smallSort(Span<Value> 
 #else
     for (size_t i = 1; i < arr.size(); i++)
         for (size_t j = 0; j < i; j++)
-            if (comp(arr[i], arr[j]))
-                ValueTraits::swapOne(arr[i], arr[j]);
+            ValueTraits::swapConditionalOne(arr[i], arr[j], comp(arr[i], arr[j]));
 
     assert(std::is_sorted(arr.data(), arr.data() + arr.size(), comp));                
 #endif
