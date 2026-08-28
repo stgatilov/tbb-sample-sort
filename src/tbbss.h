@@ -16,8 +16,10 @@
 
 #define TBBSS_CLASSIFY_UNROLL 8
 #define TBBSS_SMALLSORT_MAX 32
+
 #define TBBSS_UNCACHED_MININPUT_BYTES (1 << 20)
 #define TBBSS_UNCACHED_BUFFER_BYTES (1 << 10)
+#define TBBSS_LARGE_PAGES (2 << 20)
 
 #ifdef _MSC_VER
     #define TBBSS_FORCEINLINE __forceinline
@@ -30,6 +32,9 @@
 //#define TBBSS_SLOW_ASSERT 1
 //#define TBBSS_COLLECT_STATS 1
 
+#if TBBSS_LARGE_PAGES
+    #include <sys/mman.h>
+#endif
 
 #if TBBSS_COLLECT_STATS
     #include <atomic>
@@ -252,8 +257,22 @@ template<class T> struct Allocator {
     static T *allocate(size_t n) {
         if (!n)
             return nullptr;
-        static constexpr size_t Alignment = std::max<size_t>(alignof(T), 64);
-        return (T*) operator new[] (n * sizeof(T), std::align_val_t(Alignment));
+        size_t bytes = n * sizeof(T);
+        size_t baseAlignment = 64;
+        bool useLargePages = false;
+#if TBBSS_LARGE_PAGES
+        if (bytes >= 8 * TBBSS_LARGE_PAGES) {
+            useLargePages = true;
+            baseAlignment = TBBSS_LARGE_PAGES;
+        }
+#endif
+        size_t alignment = std::max<size_t>(alignof(T), baseAlignment);
+        T *ptr = (T*) operator new[] (bytes, std::align_val_t(alignment));
+#if TBBSS_LARGE_PAGES
+        if (useLargePages)
+            madvise(ptr, bytes, MADV_HUGEPAGE);
+#endif
+        return ptr;
     }
     static void deallocate(T *ptr) {
         if (!ptr)
