@@ -88,7 +88,7 @@ void memcpyUncached(char *dst, const char *src, size_t size);
 
 // requirements:
 //   lifetime methods must not throw...
-template<class T> struct ValueTraits {
+template<class T> struct DefaultValueTraits {
     static TBBSS_FORCEINLINE void relocateOne(T &dst, T &src) noexcept {
         new(&dst) T(static_cast<T&&>(src));
         src.~T();
@@ -144,7 +144,7 @@ template<class T> struct Allocator {
 
 //---------------------------------------------------------
 
-template<class T> class Array {
+template<class T, class ValueTraits> class Array {
     T *ptr_ = nullptr;
     size_t num_ = 0;
     size_t cap_ = 0;
@@ -166,7 +166,7 @@ public:
     Array() = default;
 
     void clear() {
-        ValueTraits<T>::destroyMany(ptr_, num_);
+        ValueTraits::destroyMany(ptr_, num_);
         num_ = 0;
     }
 
@@ -179,7 +179,7 @@ public:
     void clearResize(size_t n) {
         clearReserve(n);
         num_ = n;
-        ValueTraits<T>::constructDefaultMany(ptr_, num_);
+        ValueTraits::constructDefaultMany(ptr_, num_);
     }
 
     void clearZero(size_t n) {
@@ -191,7 +191,7 @@ public:
 
     TBBSS_FORCEINLINE void pushBack(const T& x) {
         assert(num_ < cap_);
-        ValueTraits<T>::constructCopyOne(ptr_[num_++], x);
+        ValueTraits::constructCopyOne(ptr_[num_++], x);
     }
 
     TBBSS_FORCEINLINE T *data() { return ptr_; }
@@ -244,31 +244,34 @@ public:
     }
 };
 
-template<class T> inline Span<T> makeSpan(Array<T> &arr) { return {arr.data(), arr.size()}; }
-template<class T> inline Span<const T> makeSpan(const Array<T> &arr) { return {arr.data(), arr.size()}; }
+template<class T, class ValueTraits>
+inline Span<T> makeSpan(Array<T, ValueTraits> &arr) { return {arr.data(), arr.size()}; }
+template<class T, class ValueTraits>
+inline Span<const T> makeSpan(const Array<T, ValueTraits> &arr) { return {arr.data(), arr.size()}; }
 
 //---------------------------------------------------------
 
-template<class Value> void smallSort(Span<Value> arr) {
+template<class Value, class Comp, class ValueTraits> void smallSort(Span<Value> arr, const Comp &comp) {
 #if 0
-    std::sort(arr.data(), arr.data() + arr.size());
+    std::sort(arr.data(), arr.data() + arr.size(), comp);
 #else
     for (size_t i = 1; i < arr.size(); i++)
         for (size_t j = 0; j < i; j++)
-            if (arr[i] < arr[j])
-                ValueTraits<Value>::swapOne(arr[i], arr[j]);
+            if (comp(arr[i], arr[j]))
+                ValueTraits::swapOne(arr[i], arr[j]);
 
-    assert(std::is_sorted(arr.data(), arr.data() + arr.size()));                
+    assert(std::is_sorted(arr.data(), arr.data() + arr.size(), comp));                
 #endif
 }
 
 //---------------------------------------------------------
 
-template<class Value> struct MultiPivot {
+template<class Value, class ValueTraits>
+struct MultiPivot {
     size_t numBits_ = 0;
     size_t numBuckets_ = 0;
-    Array<Value> sorted_;
-    Array<Value> tree_;
+    Array<Value, ValueTraits> sorted_;
+    Array<Value, ValueTraits> tree_;
 
     static size_t selectSamples(Span<Value> arr, size_t numBuckets, Random &random) {
         assert(isPot(numBuckets) && numBuckets >= 2);
@@ -279,14 +282,13 @@ template<class Value> struct MultiPivot {
 
         for (size_t i = 0; i < numSamples; i++) {
             size_t index = i + random.generate(numElems - i);
-            ValueTraits<Value>::swapOne(arr[i], arr[index]);
+            ValueTraits::swapOne(arr[i], arr[index]);
         }
 
         return numSamples;
     }
 
     void initFromSortedSamples(Span<Value> samples, size_t numBuckets) {
-        assert(std::is_sorted(samples.data(), samples.data() + samples.size()));
         size_t numSamples = samples.size();
 
         sorted_.clearReserve(numBuckets - 1);
@@ -308,11 +310,12 @@ template<class Value> struct MultiPivot {
         numBits_ = numBits;        
     }
 
-    TBBSS_FORCEINLINE size_t classifyOne(const Value &value) const {
+    template<class Comp>
+    TBBSS_FORCEINLINE size_t classifyOne(const Value &value, const Comp &comp) const {
         size_t res = 0;
         Span<const Value> tree = makeSpan(tree_);
         for (size_t b = 0; b < numBits_; b++) {
-            bool isLess = (value < tree[res]);
+            bool isLess = comp(value, tree[res]);
             res = 2 * res + 1 + size_t(!isLess);
         }
 
@@ -325,13 +328,14 @@ template<class Value> struct MultiPivot {
         return res;
     }
 
-    template<size_t N> TBBSS_FORCEINLINE void classifyBlock(const Value *value, size_t *res) const {
+    template<size_t N, class Comp>
+    TBBSS_FORCEINLINE void classifyBlock(const Value *value, size_t *res, const Comp &comp) const {
         Span<const Value> tree = makeSpan(tree_);
         for (size_t i = 0; i < N; i++)
             res[i] = 0;
         for (size_t b = 0; b < numBits_; b++) {
             for (size_t i = 0; i < N; i++) {
-                bool isLess = (value[i] < tree_[res[i]]);
+                bool isLess = comp(value[i], tree_[res[i]]);
                 res[i] = 2 * res[i] + 1 + size_t(!isLess);
             }
         }
@@ -343,12 +347,13 @@ template<class Value> struct MultiPivot {
 };
 
 struct PartitionResult {
-    Array<size_t> localHisto_;
-    Array<size_t> splits_;
+    Array<size_t, DefaultValueTraits<size_t>> localHisto_;
+    Array<size_t, DefaultValueTraits<size_t>> splits_;
 };
 
-template<class Value> void multiPartition(
-    Span<Value> srcElems, const MultiPivot<Value> &pivot,
+template<class Value, class ValueTraits, class Comp>
+void multiPartition(
+    Span<Value> srcElems, const MultiPivot<Value, ValueTraits> &pivot, const Comp &comp,
     Span<Value> dstElems, PartitionResult &result,
     size_t numWorkers, Span<uint8_t> bucketOf
 ) {
@@ -358,14 +363,14 @@ template<class Value> void multiPartition(
     result.localHisto_.clearZero(numWorkers * numBuckets);
     Span<size_t> localHisto = makeSpan(result.localHisto_);
 
-    parallelWorkers(numWorkers, [&pivot, numElems, numBuckets, numWorkers, srcElems, bucketOf, localHisto](size_t t) {
+    parallelWorkers(numWorkers, [&pivot, numElems, numBuckets, numWorkers, srcElems, bucketOf, localHisto, &comp](size_t t) {
         size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
         size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
         size_t i = l;
 #ifdef TBBSS_CLASSIFY_UNROLL
         for (; i + TBBSS_CLASSIFY_UNROLL <= r; i += TBBSS_CLASSIFY_UNROLL) {
             size_t bidx[TBBSS_CLASSIFY_UNROLL];
-            pivot.template classifyBlock<TBBSS_CLASSIFY_UNROLL>(&srcElems[i], bidx);
+            pivot.template classifyBlock<TBBSS_CLASSIFY_UNROLL>(&srcElems[i], bidx, comp);
             for (size_t q = 0; q < TBBSS_CLASSIFY_UNROLL; q++) {
                 size_t b = bidx[q];
                 bucketOf[i + q] = b;
@@ -374,7 +379,7 @@ template<class Value> void multiPartition(
         }
 #endif        
         for (; i < r; i++) {
-            size_t b = pivot.classifyOne(srcElems[i]);
+            size_t b = pivot.classifyOne(srcElems[i], comp);
             bucketOf[i] = b;
             localHisto[t * numBuckets + b]++;
         }
@@ -418,10 +423,10 @@ template<class Value> void multiPartition(
 
             for (size_t i = l; i < r; i++) {
                 size_t b = bucketOf[i];
-                ValueTraits<Value>::relocateOne(((Value*)buffer[b])[bufCnt[b]++], srcElems[i]);
+                ValueTraits::relocateOne(((Value*)buffer[b])[bufCnt[b]++], srcElems[i]);
                 if (bufCnt[b] == TBBSS_UNCACHED_BUFFER_BYTES / sizeof(Value)) {
                     size_t &pos = localHisto[t * numBuckets + b];
-                    ValueTraits<Value>::relocateManyUncached(&dstElems[pos], ((Value*)buffer[b]), bufCnt[b]);
+                    ValueTraits::relocateManyUncached(&dstElems[pos], ((Value*)buffer[b]), bufCnt[b]);
                     pos += bufCnt[b];
                     bufCnt[b] = 0;
                 }
@@ -431,7 +436,7 @@ template<class Value> void multiPartition(
                 if (bufCnt[b] == 0)
                     continue;
                 size_t &pos = localHisto[t * numBuckets + b];
-                ValueTraits<Value>::relocateMany(&dstElems[pos], ((Value*)buffer[b]), bufCnt[b]);
+                ValueTraits::relocateMany(&dstElems[pos], ((Value*)buffer[b]), bufCnt[b]);
                 pos += bufCnt[b];
             }
         });
@@ -444,7 +449,7 @@ template<class Value> void multiPartition(
             for (size_t i = l; i < r; i++) {
                 size_t b = bucketOf[i];
                 size_t &pos = localHisto[t * numBuckets + b];
-                ValueTraits<Value>::relocateOne(dstElems[pos++], srcElems[i]);
+                ValueTraits::relocateOne(dstElems[pos++], srcElems[i]);
             }
         });
     }
@@ -455,8 +460,8 @@ template<class Value> void multiPartition(
     for (size_t b = 0; b < numBuckets; b++) {
         assert(splits[b] <= splits[b + 1]);
         for (size_t i = splits[b]; i < splits[b + 1]; i++) {
-            assert(b == 0 || dstElems[i] >= pivot.sorted_[b - 1]);
-            assert(b == numBuckets - 1 || dstElems[i] <= pivot.sorted_[b]);
+            assert(b == 0 || !comp(dstElems[i], pivot.sorted_[b - 1]));
+            assert(b == numBuckets - 1 || !comp(pivot.sorted_[b], dstElems[i]));
         }
     }
 #endif    
@@ -464,14 +469,17 @@ template<class Value> void multiPartition(
 
 //---------------------------------------------------------
 
-template<class Value> struct SharedData;
+template<class Value, class Comp, class ValueTraits>
+struct SharedData;
 
-template<class Value> struct ThreadData {
-    MultiPivot<Value> pivot_;
+template<class Value, class ValueTraits>
+struct ThreadData {
+    MultiPivot<Value, ValueTraits> pivot_;
     PartitionResult partition_;
 };
 
-template<class Value> struct TaskData {
+template<class Value, class Comp, class ValueTraits>
+struct TaskData {
     size_t first_ = 0;
     size_t len_ = 0;
     size_t world_ = 0;
@@ -480,18 +488,20 @@ template<class Value> struct TaskData {
     Random random_;
 
     tbb::task_group *taskGroup_ = nullptr;
-    SharedData<Value> *shared_ = nullptr;
+    SharedData<Value, Comp, ValueTraits> *shared_ = nullptr;
 };
 
-template<class Value> struct SharedData {
+template<class Value, class Comp, class ValueTraits>
+struct SharedData {
     size_t numElems_ = 0;
     Span<Value> elemsSpans_[2];
     std::unique_ptr<Value[], decltype(&Allocator<Value>::deallocate)> elemsCopyStore_{nullptr, Allocator<Value>::deallocate};
 
-    Array<uint8_t> bucketIndexStore_;
+    Array<uint8_t, DefaultValueTraits<uint8_t>> bucketIndexStore_;
+    const Comp *comparator_ = nullptr;
 
     uint64_t randomSeed_ = 0xDEADBEEF01234567ull;
-    tbb::enumerable_thread_specific<ThreadData<Value>> perThread_;
+    tbb::enumerable_thread_specific<ThreadData<Value, ValueTraits>> perThread_;
 #if TBBSS_COLLECT_STATS
     std::atomic_int sizeStats_[64];
 #endif
@@ -499,24 +509,27 @@ template<class Value> struct SharedData {
 
 //---------------------------------------------------------
 
-template<class Value> void copyBack(const TaskData<Value> &task) {
+template<class Value, class Comp, class ValueTraits>
+void copyBack(const TaskData<Value, Comp, ValueTraits> &task) {
     if (task.world_ == task.whome_)
         return;
 
     Span<Value> srcElems = task.shared_->elemsSpans_[task.world_].subspan(task.first_, task.len_);
     Span<Value> dstElems = task.shared_->elemsSpans_[task.whome_].subspan(task.first_, task.len_);
-    ValueTraits<Value>::relocateMany(dstElems.data(), srcElems.data(), srcElems.size());
+    ValueTraits::relocateMany(dstElems.data(), srcElems.data(), srcElems.size());
 }
 
-template<class Value> void processBase(const TaskData<Value> &task) {
+template<class Value, class Comp, class ValueTraits>
+void processBase(const TaskData<Value, Comp, ValueTraits> &task) {
     Span<Value> srcElems = task.shared_->elemsSpans_[task.world_].subspan(task.first_, task.len_);
-    smallSort(srcElems);
+    smallSort<Value, Comp, ValueTraits>(srcElems, *task.shared_->comparator_);
 
     copyBack(task);
 }
 
-template<class Value> void processRecursive(TaskData<Value> task) {
-    SharedData<Value> *shared = task.shared_;
+template<class Value, class Comp, class ValueTraits>
+void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
+    SharedData<Value, Comp, ValueTraits> *shared = task.shared_;
 
     Span<Value> srcElems = shared->elemsSpans_[task.world_].subspan(task.first_, task.len_);
     Span<Value> dstElems = shared->elemsSpans_[task.world_ ^ 1].subspan(task.first_, task.len_);
@@ -542,17 +555,17 @@ template<class Value> void processRecursive(TaskData<Value> task) {
     }
     assert(numBuckets >= 2 && numBuckets <= 256 && isPot(numBuckets));
 
-    size_t numSamples = MultiPivot<Value>::selectSamples(srcElems, numBuckets, task.random_);
+    size_t numSamples = MultiPivot<Value, ValueTraits>::selectSamples(srcElems, numBuckets, task.random_);
 
     if (numSamples <= TBBSS_SMALLSORT_MAX) {
 #if TBBSS_COLLECT_STATS
         shared->sizeStats_[log2up(numSamples)].fetch_add(1, std::memory_order_relaxed);
 #endif
-        smallSort(srcElems.subspan(0, numSamples));
+        smallSort<Value, Comp, ValueTraits>(srcElems.subspan(0, numSamples), *shared->comparator_);
     }
     else {
         tbb::task_group subTaskGroup;
-        TaskData<Value> samplesTask;
+        TaskData<Value, Comp, ValueTraits> samplesTask;
         samplesTask.shared_ = shared;
         samplesTask.taskGroup_ = &subTaskGroup;
         samplesTask.first_ = task.first_;
@@ -568,17 +581,17 @@ template<class Value> void processRecursive(TaskData<Value> task) {
 
     // note: we can't use threadlocal data before sorting samples
     // because the recursive call can overwrite it
-    ThreadData<Value> *perThread = &shared->perThread_.local();
+    ThreadData<Value, ValueTraits> *perThread = &shared->perThread_.local();
     perThread->pivot_.initFromSortedSamples(srcElems.subspan(0, numSamples), numBuckets);
 
     multiPartition(
-        srcElems, perThread->pivot_,
+        srcElems, perThread->pivot_, *shared->comparator_,
         dstElems, perThread->partition_,
         task.numWorkers_, bucketOf
     );
     Span<const size_t> splits = makeSpan(perThread->partition_.splits_);
 
-    TaskData<Value> subTask;
+    TaskData<Value, Comp, ValueTraits> subTask;
     subTask.shared_ = task.shared_;
     subTask.taskGroup_ = task.taskGroup_;
     subTask.world_ = task.world_ ^ 1;
@@ -619,13 +632,18 @@ template<class Value> void processRecursive(TaskData<Value> task) {
 
 //---------------------------------------------------------
 
-template<class Value> void sampleSort(Value *begin, size_t num) {
+template<
+    class Value,
+    class Comp = std::less<Value>,
+    class ValueTraits = DefaultValueTraits<Value>
+>
+void sampleSort(Value *begin, size_t num, const Comp &comp = Comp()) {
     if (num <= TBBSS_SMALLSORT_MAX) {
-        smallSort<Value>({begin, num});
+        smallSort<Value, Comp, ValueTraits>({begin, num}, comp);
         return;
     }
 
-    SharedData<Value> shared;
+    SharedData<Value, Comp, ValueTraits> shared;
     shared.elemsCopyStore_.reset(Allocator<Value>::allocate(num));
     shared.bucketIndexStore_.clearResize(num);
     shared.numElems_ = num;
@@ -634,7 +652,7 @@ template<class Value> void sampleSort(Value *begin, size_t num) {
 
     tbb::task_group rootTaskGroup;
 
-    TaskData<Value> task;
+    TaskData<Value, Comp, ValueTraits> task;
     task.shared_ = &shared;
     task.taskGroup_ = &rootTaskGroup;
     task.first_ = 0;
