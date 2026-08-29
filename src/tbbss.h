@@ -52,7 +52,7 @@ TBBSS_FORCEINLINE bool isPot(size_t x) {
 
 inline size_t log2up(size_t x) {
     size_t res = 0;
-    while ((1 << res) < x)
+    while ((size_t(1) << res) < x)
         res++;
     return res;
 }
