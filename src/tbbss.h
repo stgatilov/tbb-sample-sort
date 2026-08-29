@@ -122,12 +122,12 @@ template<class T> struct Allocator {
 };
 
 template<class T> struct Raw {
-    alignas(T) char bytes[sizeof(T)];
+    alignas(T) char bytes_[sizeof(T)];
 
-    TBBSS_FORCEINLINE T *data() { return reinterpret_cast<T *>(bytes); }
-    TBBSS_FORCEINLINE const T *data() const { return reinterpret_cast<const T *>(bytes); }
-    TBBSS_FORCEINLINE T &get() { return *reinterpret_cast<T *>(bytes); }
-    TBBSS_FORCEINLINE const T &get() const { return *reinterpret_cast<const T *>(bytes); }
+    TBBSS_FORCEINLINE T *data() { return reinterpret_cast<T *>(bytes_); }
+    TBBSS_FORCEINLINE const T *data() const { return reinterpret_cast<const T *>(bytes_); }
+    TBBSS_FORCEINLINE T &get() { return *reinterpret_cast<T *>(bytes_); }
+    TBBSS_FORCEINLINE const T &get() const { return *reinterpret_cast<const T *>(bytes_); }
 };
 template<class T> constexpr inline bool IsRaw = false;
 template<class T> constexpr inline bool IsRaw<Raw<T>> = true;
