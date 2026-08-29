@@ -2,7 +2,6 @@
 #include <cstring>
 #include <cassert>
 
-#include <memory>
 #include <algorithm>
 #include <type_traits>
 
@@ -113,8 +112,8 @@ template<class T> struct Allocator {
 #endif
         return ptr;
     }
-    static void deallocate(T *ptr) {
-        if (!ptr)
+    static void deallocate(T *ptr, size_t n) {
+        if (!n)
             return;
         operator delete[] (ptr);
     }
@@ -128,6 +127,8 @@ template<class T> struct Raw {
     TBBSS_FORCEINLINE T &get() { return *reinterpret_cast<T *>(bytes); }
     TBBSS_FORCEINLINE const T &get() const { return *reinterpret_cast<const T *>(bytes); }
 };
+template<class T> constexpr inline bool IsRaw = false;
+template<class T> constexpr inline bool IsRaw<Raw<T>> = true;
 
 //---------------------------------------------------------
 
@@ -287,8 +288,8 @@ struct DefaultValueTraits {
 
 template<class T>
 void constructDefaultMany(T *dst, size_t n) noexcept {
-    // only used for integers internally, never used for sorted user elements
-    static_assert(std::is_integral_v<T>);
+    // only used internally, never used for user elements
+    static_assert(std::is_integral_v<T> || IsRaw<T>);
     for (size_t i = 0; i < n; i++)
         new(&dst[i]) T;
 }
@@ -304,7 +305,7 @@ template<class T, class ValueTraits> class Array {
         assert(n > cap_);
         assert(num_ == 0);
         n = std::max(n, 2 * cap_ + 1);
-        Allocator<T>::deallocate(ptr_);
+        Allocator<T>::deallocate(ptr_, cap_);
         ptr_ = Allocator<T>::allocate(n);
         cap_ = n;
     }
@@ -312,7 +313,7 @@ template<class T, class ValueTraits> class Array {
 public:
     ~Array() {
         clear();
-        Allocator<T>::deallocate(ptr_);
+        Allocator<T>::deallocate(ptr_, cap_);
     }
     Array() = default;
 
@@ -331,13 +332,6 @@ public:
         clearReserve(n);
         num_ = n;
         constructDefaultMany(ptr_, num_);
-    }
-
-    void clearZero(size_t n) {
-        static_assert(std::is_integral_v<T>); // never used for elements
-        clearResize(n);
-        for (size_t i = 0; i < num_; i++)
-            ptr_[i] = 0;
     }
 
     TBBSS_FORCEINLINE void pushBack(const T& x) {
@@ -659,7 +653,7 @@ template<class Value, class Comp, class ValueTraits>
 struct SharedData {
     size_t numElems_ = 0;
     Span<Value> elemsSpans_[2];
-    std::unique_ptr<Value[], decltype(&Allocator<Value>::deallocate)> elemsCopyStore_{nullptr, Allocator<Value>::deallocate};
+    Array<Raw<Value>, DefaultValueTraits<Raw<Value>>> elemsCopyStore_;
 
     Array<uint8_t, DefaultValueTraits<uint8_t>> bucketIndexStore_;
     const Comp *comparator_ = nullptr;
@@ -805,11 +799,11 @@ void sampleSort(Value *begin, size_t num, const Comp &comp = Comp()) {
     }
 
     SharedData<Value, Comp, ValueTraits> shared;
-    shared.elemsCopyStore_.reset(Allocator<Value>::allocate(num));
+    shared.elemsCopyStore_.clearResize(num);
     shared.bucketIndexStore_.clearResize(num);
     shared.numElems_ = num;
     shared.elemsSpans_[0] = {begin, num};
-    shared.elemsSpans_[1] = {shared.elemsCopyStore_.get(), num};
+    shared.elemsSpans_[1] = {shared.elemsCopyStore_[0].data(), num};
 
     tbb::task_group rootTaskGroup;
 
