@@ -1,9 +1,10 @@
+#include "tbbss.h"
+
 #include <stdio.h>
 #include <assert.h>
 #include <span>
 #include <chrono>
-
-#include "tbbss.h"
+#include <random>
 
 #include <oneapi/tbb/global_control.h>
 #include <oneapi/tbb/parallel_sort.h>
@@ -33,6 +34,7 @@ double getTimeDiff(std::chrono::steady_clock::time_point a, std::chrono::steady_
 
 //#define REDUCE_BITS 40
 //#define TBB_FORCE_THREADS 1
+#define TBB_PARALLEL_SORTS 1
 
 int main() {
 #ifdef TBB_FORCE_THREADS
@@ -48,18 +50,33 @@ int main() {
     auto t1 = getTimestamp();
     printf("%4.0lf ms : read input\n", getTimeDiff(t0, t1));
 
+    size_t numRanges = TBB_PARALLEL_SORTS;
+    std::vector<size_t> splits;
+    splits.push_back(0);
+    splits.push_back(input.size());
+    std::mt19937 rnd;
+    for (size_t i = 0; i < numRanges - 1; i++)
+        splits.push_back(rnd() % input.size());
+    std::sort(splits.data(), splits.data() + splits.size());
+
+    tbb::parallel_for<size_t>(0, numRanges, [&](size_t r) {
+        size_t beg = splits[r + 0];
+        size_t end = splits[r + 1];
 #if 1
-    tbbss::sampleSort(input.data(), input.size());
+        tbbss::sampleSort(input.data() + beg, end - beg);
 #else
-    tbb::parallel_sort(input.data(), input.data() + input.size());
+        tbb::parallel_sort(input.data() + beg, input.data() + end);
 #endif
+    });
     auto t2 = getTimestamp();
-    printf("%4.0lf ms : sort\n", getTimeDiff(t1, t2));
+    printf("%4.0lf ms : sort[%zu]\n", getTimeDiff(t1, t2), numRanges);
 
     std::vector<size_t> badpos;
-    for (size_t i = 1; i < input.size(); i++)
-        if (input[i] < input[i - 1])
-            badpos.push_back(i - 1);
+    for (size_t r = 0; r < numRanges; r++) {
+        for (size_t i = splits[r] + 1; i < splits[r + 1]; i++)
+            if (input[i] < input[i - 1])
+                badpos.push_back(i - 1);
+    }
 
     if (!badpos.empty()) {
         printf("FAILED: %zu of %zu\n", badpos.size(), input.size());
@@ -68,7 +85,9 @@ int main() {
         std::terminate();
     }
 
-    assert(std::is_sorted(input.data(), input.data() + input.size()));
+    for (size_t r = 0; r < numRanges; r++) {
+        assert(std::is_sorted(input.data() + splits[r], input.data() + splits[r + 1]));
+    }
     auto t3 = getTimestamp();
     printf("%4.0lf ms : validate\n", getTimeDiff(t2, t3));
 
