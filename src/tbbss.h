@@ -768,9 +768,11 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
         if (subTask.len_ == 0)
             continue;
 
-        if (b > 0 && b < numBuckets - 1 && pivot.sortedStore_[b - 1].get() == pivot.sortedStore_[b].get()) {
+        const Comp &comp = *shared->comparator_;
+        if (b > 0 && b < numBuckets - 1 && !comp(pivot.sortedStore_[b - 1].get(), pivot.sortedStore_[b].get())) {
+            const Value &ref = pivot.sortedStore_[b].get();
             for (size_t i = splits[b]; i < splits[b + 1]; i++)
-                assert(dstElems[i] == pivot.sortedStore_[b].get());
+                assert(!comp(dstElems[i], ref) && !comp(ref, dstElems[i]));
             copyBack(subTask);
             continue;
         }

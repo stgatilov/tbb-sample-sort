@@ -9,15 +9,27 @@
 #include <oneapi/tbb/global_control.h>
 #include <oneapi/tbb/parallel_sort.h>
 
+#pragma pack(push, 1)
+struct Element {
+    uint64_t key;
+    #if 1
+        uint32_t value;
+    #endif
 
-std::vector<uint64_t> readBinFile(const char *filename) {
+    bool operator< (const Element &b) const {
+        return key < b.key;
+    }
+};
+#pragma pack(pop)
+
+std::vector<Element> readBinFile(const char *filename) {
     FILE *f = fopen(filename, "rb");
     if (!f)
         std::terminate();
     uint64_t num = 0;
     if (fread(&num, sizeof(num), 1, f) != 1)
         std::terminate();
-    std::vector<uint64_t> data(num);
+    std::vector<Element> data(num);
     if (fread(data.data(), sizeof(data[0]), num, f) != num)
         std::terminate();
     fclose(f);
@@ -32,7 +44,6 @@ double getTimeDiff(std::chrono::steady_clock::time_point a, std::chrono::steady_
     return std::chrono::duration<double, std::milli>(b - a).count();
 }
 
-//#define REDUCE_BITS 40
 //#define TBB_FORCE_THREADS 1
 #define TBB_PARALLEL_SORTS 1
 
@@ -42,11 +53,7 @@ int main() {
 #endif
 
     auto t0 = getTimestamp();
-    std::vector<uint64_t> input = readBinFile("input.bin");
-#ifdef REDUCE_BITS
-    for (uint64_t &x : input)
-        x >>= REDUCE_BITS;
-#endif
+    std::vector<Element> input = readBinFile("input.bin");
     auto t1 = getTimestamp();
     printf("%4.0lf ms : read input\n", getTimeDiff(t0, t1));
 
@@ -79,9 +86,10 @@ int main() {
     }
 
     if (!badpos.empty()) {
+        typedef unsigned long long uint64t;
         printf("FAILED: %zu of %zu\n", badpos.size(), input.size());
         for (size_t i = 0; i < std::min(int(badpos.size()), 100); i++)
-            printf("  [%zu .. %zu]: %zu > %zu\n", badpos[i], badpos[i] + 1, input[badpos[i]], input[badpos[i] + 1]);
+            printf("  [%zu .. %zu]: %llu > %llu\n", badpos[i], badpos[i] + 1, uint64t(input[badpos[i]].key), uint64t(input[badpos[i] + 1].key));
         std::terminate();
     }
 
