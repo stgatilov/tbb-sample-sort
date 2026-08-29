@@ -426,8 +426,13 @@ template<class Value, class ValueTraits>
 struct MultiPivot {
     size_t numBits_ = 0;
     size_t numBuckets_ = 0;
-    Array<Value, ValueTraits> sorted_;
-    Array<Value, ValueTraits> tree_;
+    Raw<Value> sortedStore_[TBBSS_MAX_BUCKETS];
+    Raw<Value> treeStore_[TBBSS_MAX_BUCKETS];
+
+    ~MultiPivot() {
+        ValueTraits::destroyMany(sortedStore_[0].data(), numBuckets_ - 1);
+        ValueTraits::destroyMany(treeStore_[0].data(), numBuckets_ - 1);
+    }
 
     static size_t selectSamples(Span<Value> arr, size_t numBuckets, Random &random) {
         assert(isPot(numBuckets) && numBuckets >= 2);
@@ -447,20 +452,25 @@ struct MultiPivot {
     void initFromSortedSamples(Span<Value> samples, size_t numBuckets) {
         size_t numSamples = samples.size();
 
-        sorted_.clearReserve(numBuckets - 1);
+        Span<Value> sorted(sortedStore_[0].data(), numBuckets - 1);
+        assert(sorted.size() <= std::size(sortedStore_));
+
         for (size_t i = 1; i <= numBuckets - 1; i++) {
             uint64_t pos = uint64_t(numSamples) * i / numBuckets;
-            sorted_.pushBack(samples[pos]);
+            ValueTraits::constructCopyOne(sorted[i - 1], samples[pos]);
         }
 
         size_t numBits = log2up(numBuckets);
 
-        tree_.clearReserve(numBuckets - 1);
+        Span<Value> tree(treeStore_[0].data(), numBuckets - 1);
+        assert(tree.size() <= std::size(treeStore_));
+        size_t filled = 0;
         for (int b = numBits - 1; b >= 0; b--) {
             size_t len = (1 << b);
             for (size_t i = len - 1; i < numBuckets; i += len * 2)
-                tree_.pushBack(sorted_[i]);
+                ValueTraits::constructCopyOne(tree[filled++], sorted[i]);
         }
+        assert(filled == tree.size());
 
         numBuckets_ = numBuckets;
         numBits_ = numBits;        
@@ -469,35 +479,37 @@ struct MultiPivot {
     template<class Comp>
     TBBSS_FORCEINLINE size_t classifyOne(const Value &value, const Comp &comp) const {
         size_t res = 0;
-        Span<const Value> tree = makeSpan(tree_);
+        Span<const Value> tree(treeStore_[0].data(), numBuckets_ - 1);
         for (size_t b = 0; b < numBits_; b++) {
             bool isLess = comp(value, tree[res]);
             res = 2 * res + 1 + size_t(!isLess);
         }
 
+        Span<const Value> sorted(sortedStore_[0].data(), numBuckets_ - 1);
         res -= (numBuckets_ - 1);
-        assert(res == numBuckets_ - 1 || (value < sorted_[res]));
-        assert(res == 0 || !(value < sorted_[res - 1]));
+        assert(res == numBuckets_ - 1 || (value < sorted[res]));
+        assert(res == 0 || !(value < sorted[res - 1]));
 
-        res -= (res > 0 && value == sorted_[res - 1]);
+        res -= (res > 0 && value == sorted[res - 1]);
         assert(res < numBuckets_);
         return res;
     }
 
     template<size_t N, class Comp>
     TBBSS_FORCEINLINE void classifyBlock(const Value *value, size_t *res, const Comp &comp) const {
-        Span<const Value> tree = makeSpan(tree_);
+        Span<const Value> tree(treeStore_[0].data(), numBuckets_ - 1);
         for (size_t i = 0; i < N; i++)
             res[i] = 0;
         for (size_t b = 0; b < numBits_; b++) {
             for (size_t i = 0; i < N; i++) {
-                bool isLess = comp(value[i], tree_[res[i]]);
+                bool isLess = comp(value[i], tree[res[i]]);
                 res[i] = 2 * res[i] + 1 + size_t(!isLess);
             }
         }
+        Span<const Value> sorted(sortedStore_[0].data(), numBuckets_ - 1);
         for (size_t i = 0; i < N; i++) {
             res[i] -= (numBuckets_ - 1);
-            res[i] -= (res[i] > 0 && value[i] == sorted_[res[i] - 1]);
+            res[i] -= (res[i] > 0 && value[i] == sorted[res[i] - 1]);
         }
     }
 };
@@ -630,7 +642,6 @@ struct SharedData;
 
 template<class Value, class ValueTraits>
 struct ThreadData {
-    MultiPivot<Value, ValueTraits> pivot_;
     PartitionResult partition_;
 };
 
@@ -736,10 +747,11 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
     // note: we can't use threadlocal data before sorting samples
     // because the recursive call can overwrite it
     ThreadData<Value, ValueTraits> *perThread = &shared->perThread_.local();
-    perThread->pivot_.initFromSortedSamples(srcElems.subspan(0, numSamples), numBuckets);
+    MultiPivot<Value, ValueTraits> pivot;
+    pivot.initFromSortedSamples(srcElems.subspan(0, numSamples), numBuckets);
 
     multiPartition(
-        srcElems, perThread->pivot_, *shared->comparator_,
+        srcElems, pivot, *shared->comparator_,
         dstElems, perThread->partition_,
         task.numWorkers_, bucketOf
     );
@@ -758,9 +770,9 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
         if (subTask.len_ == 0)
             continue;
 
-        if (b > 0 && b < numBuckets - 1 && perThread->pivot_.sorted_[b - 1] == perThread->pivot_.sorted_[b]) {
+        if (b > 0 && b < numBuckets - 1 && pivot.sortedStore_[b - 1].get() == pivot.sortedStore_[b].get()) {
             for (size_t i = splits[b]; i < splits[b + 1]; i++)
-                assert(dstElems[i] == perThread->pivot_.sorted_[b]);
+                assert(dstElems[i] == pivot.sortedStore_[b].get());
             copyBack(subTask);
             continue;
         }
