@@ -93,6 +93,45 @@ struct Random {
 
 //---------------------------------------------------------
 
+template<class T> struct Allocator {
+    static T *allocate(size_t n) {
+        if (!n)
+            return nullptr;
+        size_t bytes = n * sizeof(T);
+        size_t baseAlignment = 64;
+        bool useLargePages = false;
+#if TBBSS_LARGE_PAGES
+        if (bytes >= 8 * TBBSS_LARGE_PAGES) {
+            useLargePages = true;
+            baseAlignment = TBBSS_LARGE_PAGES;
+        }
+#endif
+        size_t alignment = std::max<size_t>(alignof(T), baseAlignment);
+        T *ptr = (T*) operator new[] (bytes, std::align_val_t(alignment));
+#if TBBSS_LARGE_PAGES
+        if (useLargePages)
+            madvise(ptr, bytes, MADV_HUGEPAGE);
+#endif
+        return ptr;
+    }
+    static void deallocate(T *ptr) {
+        if (!ptr)
+            return;
+        operator delete[] (ptr);
+    }
+};
+
+template<class T> struct Raw {
+    alignas(T) char bytes[sizeof(T)];
+
+    TBBSS_FORCEINLINE T *data() { return reinterpret_cast<T *>(bytes); }
+    TBBSS_FORCEINLINE const T *data() const { return reinterpret_cast<T *>(bytes); }
+    TBBSS_FORCEINLINE T &get() { return *reinterpret_cast<T *>(bytes); }
+    TBBSS_FORCEINLINE const T &get() const { return *reinterpret_cast<T *>(bytes); }
+};
+
+//---------------------------------------------------------
+
 void memcpyUncached(char *dst, const char *src, size_t size);
 
 template<class T> TBBSS_FORCEINLINE void memcpyElement(void *dst, const void *src) {
@@ -195,7 +234,7 @@ struct DefaultValueTraits {
             src = static_cast<T&&>(temp);
         }
         else {
-            alignas(T) char temp[sizeof(T)];
+            Raw<T> temp;
             memcpyElement<T>(&temp, &dst);
             memcpyElement<T>(&dst, &src);
             memcpyElement<T>(&src, &temp);
@@ -254,36 +293,6 @@ void constructDefaultMany(T *dst, size_t n) noexcept {
     for (size_t i = 0; i < n; i++)
         new(&dst[i]) T;
 }
-
-//---------------------------------------------------------
-
-template<class T> struct Allocator {
-    static T *allocate(size_t n) {
-        if (!n)
-            return nullptr;
-        size_t bytes = n * sizeof(T);
-        size_t baseAlignment = 64;
-        bool useLargePages = false;
-#if TBBSS_LARGE_PAGES
-        if (bytes >= 8 * TBBSS_LARGE_PAGES) {
-            useLargePages = true;
-            baseAlignment = TBBSS_LARGE_PAGES;
-        }
-#endif
-        size_t alignment = std::max<size_t>(alignof(T), baseAlignment);
-        T *ptr = (T*) operator new[] (bytes, std::align_val_t(alignment));
-#if TBBSS_LARGE_PAGES
-        if (useLargePages)
-            madvise(ptr, bytes, MADV_HUGEPAGE);
-#endif
-        return ptr;
-    }
-    static void deallocate(T *ptr) {
-        if (!ptr)
-            return;
-        operator delete[] (ptr);
-    }
-};
 
 //---------------------------------------------------------
 
@@ -398,9 +407,9 @@ template<class Value, class Comp, class ValueTraits> void smallSort(Span<Value> 
 #if 0
     std::sort(arr.data(), arr.data() + arr.size(), comp);
 #else
-    alignas(Value) char buffer[sizeof(Value)];
+    Raw<Value> buffer;
     for (size_t i = 1; i < arr.size(); i++) {
-        Value &arrI = *reinterpret_cast<Value*>(buffer);
+        Value &arrI = buffer.get();
         ValueTraits::relocateOne(arrI, arr[i]);
         for (size_t j = 0; j < i; j++)
             ValueTraits::swapConditionalOne(arrI, arr[j], comp(arrI, arr[j]));
@@ -561,8 +570,8 @@ void multiPartition(
             size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
             size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
 
-            alignas(Value) char buffer[TBBSS_MAX_BUCKETS][TBBSS_UNCACHED_BUFFER_BYTES];
             static_assert(sizeof(Value) <= TBBSS_UNCACHED_BUFFER_BYTES);
+            Raw<Value> buffer[TBBSS_MAX_BUCKETS][TBBSS_UNCACHED_BUFFER_BYTES / sizeof(Value)];
             
             uint32_t bufCnt[TBBSS_MAX_BUCKETS];
             for (size_t b = 0; b < numBuckets; b++)
@@ -570,10 +579,10 @@ void multiPartition(
 
             for (size_t i = l; i < r; i++) {
                 size_t b = bucketOf[i];
-                ValueTraits::relocateOne(((Value*)buffer[b])[bufCnt[b]++], srcElems[i]);
+                ValueTraits::relocateOne(buffer[b][bufCnt[b]++].get(), srcElems[i]);
                 if (bufCnt[b] == TBBSS_UNCACHED_BUFFER_BYTES / sizeof(Value)) {
                     size_t &pos = localHisto[t * numBuckets + b];
-                    ValueTraits::relocateManyUncached(&dstElems[pos], ((Value*)buffer[b]), bufCnt[b]);
+                    ValueTraits::relocateManyUncached(&dstElems[pos], buffer[b][0].data(), bufCnt[b]);
                     pos += bufCnt[b];
                     bufCnt[b] = 0;
                 }
@@ -583,7 +592,7 @@ void multiPartition(
                 if (bufCnt[b] == 0)
                     continue;
                 size_t &pos = localHisto[t * numBuckets + b];
-                ValueTraits::relocateMany(&dstElems[pos], ((Value*)buffer[b]), bufCnt[b]);
+                ValueTraits::relocateMany(&dstElems[pos], buffer[b][0].data(), bufCnt[b]);
                 pos += bufCnt[b];
             }
         });
