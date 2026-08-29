@@ -41,7 +41,7 @@ void memcpyUncached(char *dst, const char *src, size_t size) {
     memcpy(dst, src, size);
 }
 
-void *allocateMemory(size_t bytes, size_t reqAlign) {
+static std::pair<size_t, bool> selectAlignment(size_t bytes, size_t reqAlign) {
     size_t baseAlignment = 64;
     bool useLargePages = false;
 #if TBBSS_LARGE_PAGES
@@ -51,7 +51,12 @@ void *allocateMemory(size_t bytes, size_t reqAlign) {
     }
 #endif
     size_t alignment = std::max<size_t>(reqAlign, baseAlignment);
-    void *ptr = operator new[] (bytes, std::align_val_t(alignment));
+    return {alignment, useLargePages};
+}
+
+void *allocateMemory(size_t bytes, size_t reqAlign) {
+    auto [alignment, useLargePages] = selectAlignment(bytes, reqAlign);
+    void *ptr = operator new (bytes, std::align_val_t(alignment));
 #if TBBSS_LARGE_PAGES
     if (useLargePages)
         madvise(ptr, bytes, MADV_HUGEPAGE);
@@ -60,7 +65,8 @@ void *allocateMemory(size_t bytes, size_t reqAlign) {
 }
 
 void deallocateMemory(void *ptr, size_t bytes, size_t reqAlign) {
-    operator delete[] (ptr);
+    auto [alignment, useLargePages] = selectAlignment(bytes, reqAlign);
+    operator delete (ptr, std::align_val_t(alignment));
 }
 
 }
