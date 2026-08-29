@@ -9,8 +9,6 @@
 #include <oneapi/tbb/task_group.h>
 #include <oneapi/tbb/task_arena.h>
 
-#include "pcg_basic.h"
-
 
 #define TBBSS_CLASSIFY_UNROLL 8
 #define TBBSS_SMALLSORT_MAX 32
@@ -69,19 +67,48 @@ template<class Lambda> void parallelWorkers(size_t numWorkers, Lambda&& lambda) 
 //---------------------------------------------------------
 
 struct Random {
-    pcg32_random_t lower_{};
-    pcg32_random_t upper_{};
+    //==========================================
+    // xorshiro256++ version 1.0, taken from:
+    //   https://prng.di.unimi.it/xoshiro256plusplus.c
 
-    void initStream(uint64_t seed, size_t stream) {
-        pcg32_srandom_r(&lower_, seed, 2 * stream + 0);
-        pcg32_srandom_r(&upper_, seed, 2 * stream + 1);
+    uint64_t s[4];
+
+    static TBBSS_FORCEINLINE uint64_t rotl(const uint64_t x, int k) {
+        return (x << k) | (x >> (64 - k));
+    }
+
+    uint64_t TBBSS_FORCEINLINE next(void) {
+        const uint64_t result = rotl(s[0] + s[3], 23) + s[0];
+
+        const uint64_t t = s[1] << 17;
+
+        s[2] ^= s[0];
+        s[3] ^= s[1];
+        s[1] ^= s[2];
+        s[0] ^= s[3];
+
+        s[2] ^= t;
+
+        s[3] = rotl(s[3], 45);
+
+        return result;
+    }
+
+    //==========================================
+
+    void init(size_t start, size_t len, uint64_t seed) {
+        s[0] = start;
+        s[1] = len;
+        assert(len != 0);
+        s[2] = seed;
+        s[3] = (start ^ len) * 137;
+
+        for (int i = 0; i < 4; i++)
+            next();
     }
 
     size_t generate(size_t maxExclusive) {
-        uint64_t x = pcg32_random_r(&upper_);
-        x <<= 32;
-        x += pcg32_random_r(&lower_);
-        return x % maxExclusive;
+        return next() % maxExclusive;
     }
 };
 
@@ -627,7 +654,6 @@ struct TaskData {
     size_t world_ = 0;
     size_t whome_ = 0;
     size_t numWorkers_ = 0;
-    Random random_;
 
     tbb::task_group *taskGroup_ = nullptr;
     SharedData<Value, Comp, ValueTraits> *shared_ = nullptr;
@@ -695,7 +721,9 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
     }
     assert(numBuckets >= 2 && numBuckets <= TBBSS_MAX_BUCKETS && isPot(numBuckets));
 
-    size_t numSamples = MultiPivot<Value, ValueTraits>::selectSamples(srcElems, numBuckets, task.random_);
+    Random random;
+    random.init(task.first_, task.len_, shared->randomSeed_);
+    size_t numSamples = MultiPivot<Value, ValueTraits>::selectSamples(srcElems, numBuckets, random);
 
     if (numSamples <= TBBSS_SMALLSORT_MAX) {
         TBBSS_STATS_ADD(shared->sizeStats_[log2up(numSamples)], 1);
@@ -711,7 +739,6 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
         samplesTask.world_ = task.world_;
         samplesTask.whome_ = task.world_;
         samplesTask.numWorkers_ = 1;
-        samplesTask.random_ = task.random_;
         TBBSS_STATS_ADD(shared->taskStats_, 1);
         subTaskGroup.run_and_wait([samplesTask] {
             processRecursive(samplesTask);
@@ -757,11 +784,6 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
             continue;
         }
 
-        if (b == 0)
-            subTask.random_ = task.random_;
-        else
-            subTask.random_.initStream(task.shared_->randomSeed_, subTask.first_);
-
         TBBSS_STATS_ADD(shared->taskStats_, 1);
         task.taskGroup_->run([subTask] {
             processRecursive(subTask);
@@ -799,7 +821,6 @@ void sampleSort(Value *begin, size_t num, const Comp &comp = Comp()) {
     task.numWorkers_ = tbb::this_task_arena::max_concurrency();
     task.world_ = 0;
     task.whome_ = 0;
-    task.random_.initStream(shared.randomSeed_, task.first_);
 
     TBBSS_STATS_ADD(shared.taskStats_, 1);
     rootTaskGroup.run_and_wait([&task] {

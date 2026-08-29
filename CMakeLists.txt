@@ -14,7 +14,6 @@ add_executable(${PROJECT_NAME}
     src/main.cpp
     src/tbbss.cpp
     src/tbbss.h
-    src/pcg_basic.h
 )
 set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)
 target_link_libraries(${PROJECT_NAME} onetbb::onetbb)
