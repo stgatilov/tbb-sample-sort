@@ -16,6 +16,7 @@
 
 #define TBBSS_CLASSIFY_UNROLL 8
 #define TBBSS_SMALLSORT_MAX 32
+#define TBBSS_MAX_BUCKETS 256
 
 #define TBBSS_UNCACHED_MININPUT_BYTES (1 << 20)
 #define TBBSS_UNCACHED_BUFFER_BYTES (1 << 10)
@@ -560,10 +561,10 @@ void multiPartition(
             size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
             size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
 
-            alignas(Value) char buffer[256][TBBSS_UNCACHED_BUFFER_BYTES];
+            alignas(Value) char buffer[TBBSS_MAX_BUCKETS][TBBSS_UNCACHED_BUFFER_BYTES];
             static_assert(sizeof(Value) <= TBBSS_UNCACHED_BUFFER_BYTES);
             
-            uint32_t bufCnt[256];
+            uint32_t bufCnt[TBBSS_MAX_BUCKETS];
             for (size_t b = 0; b < numBuckets; b++)
                 bufCnt[b] = 0;
 
@@ -696,9 +697,9 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
         // two levels: aim for 8-16 elements per bucket
         size_t logb = (logn - 4) / 2;
         numBuckets = 1 << logb;
-        numBuckets = std::min<size_t>(numBuckets, 256);
+        numBuckets = std::min<size_t>(numBuckets, TBBSS_MAX_BUCKETS);
     }
-    assert(numBuckets >= 2 && numBuckets <= 256 && isPot(numBuckets));
+    assert(numBuckets >= 2 && numBuckets <= TBBSS_MAX_BUCKETS && isPot(numBuckets));
 
     size_t numSamples = MultiPivot<Value, ValueTraits>::selectSamples(srcElems, numBuckets, task.random_);
 
