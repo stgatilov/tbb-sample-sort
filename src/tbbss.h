@@ -486,10 +486,10 @@ struct MultiPivot {
 
         Span<const Value> sorted(sortedStore_[0].data(), numBuckets_ - 1);
         res -= (numBuckets_ - 1);
-        assert(res == numBuckets_ - 1 || (value < sorted[res]));
-        assert(res == 0 || !(value < sorted[res - 1]));
+        assert(res == numBuckets_ - 1 || comp(value, sorted[res]));
+        assert(res == 0 || !comp(value, sorted[res - 1]));
 
-        res -= (res > 0 && value == sorted[res - 1]);
+        res -= (res > 0 && !comp(sorted[res - 1], value));
         assert(res < numBuckets_);
         return res;
     }
@@ -508,7 +508,7 @@ struct MultiPivot {
         Span<const Value> sorted(sortedStore_[0].data(), numBuckets_ - 1);
         for (size_t i = 0; i < N; i++) {
             res[i] -= (numBuckets_ - 1);
-            res[i] -= (res[i] > 0 && value[i] == sorted[res[i] - 1]);
+            res[i] -= (res[i] > 0 && !comp(sorted[res[i] - 1], value[i]));
         }
     }
 };
