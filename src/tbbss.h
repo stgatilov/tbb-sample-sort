@@ -68,43 +68,34 @@ template<class Lambda> void parallelWorkers(size_t numWorkers, Lambda&& lambda) 
 
 struct Random {
     //==========================================
-    // xorshiro256++ version 1.0, taken from:
-    //   https://prng.di.unimi.it/xoshiro256plusplus.c
+    // xoroshiro128++ version 1.0, taken from:
+    //   https://prng.di.unimi.it/xoroshiro128plusplus.c
 
-    uint64_t s[4];
-
-    static TBBSS_FORCEINLINE uint64_t rotl(const uint64_t x, int k) {
-        return (x << k) | (x >> (64 - k));
+    static TBBSS_FORCEINLINE int64_t rotl(const uint64_t x, int k) {
+    	return (x << k) | (x >> (64 - k));
     }
 
+    uint64_t s[2];
+
     uint64_t TBBSS_FORCEINLINE next(void) {
-        const uint64_t result = rotl(s[0] + s[3], 23) + s[0];
+    	const uint64_t s0 = s[0];
+    	uint64_t s1 = s[1];
+    	const uint64_t result = rotl(s0 + s1, 17) + s0;
 
-        const uint64_t t = s[1] << 17;
+    	s1 ^= s0;
+    	s[0] = rotl(s0, 49) ^ s1 ^ (s1 << 21); // a, b
+    	s[1] = rotl(s1, 28); // c
 
-        s[2] ^= s[0];
-        s[3] ^= s[1];
-        s[1] ^= s[2];
-        s[0] ^= s[3];
-
-        s[2] ^= t;
-
-        s[3] = rotl(s[3], 45);
-
-        return result;
+    	return result;
     }
 
     //==========================================
 
     void init(size_t start, size_t len, uint64_t seed) {
-        s[0] = start;
+        s[0] = start ^ seed;
         s[1] = len;
         assert(len != 0);
-        s[2] = seed;
-        s[3] = (start ^ len) * 137;
-
-        for (int i = 0; i < 4; i++)
-            next();
+        next();
     }
 
     size_t generate(size_t maxExclusive) {
