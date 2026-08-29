@@ -9,7 +9,6 @@
 #include <oneapi/tbb/parallel_for.h>
 #include <oneapi/tbb/task_group.h>
 #include <oneapi/tbb/task_arena.h>
-#include <oneapi/tbb/enumerable_thread_specific.h>
 
 #include "pcg_basic.h"
 
@@ -514,22 +513,24 @@ struct MultiPivot {
     }
 };
 
-struct PartitionResult {
-    Array<size_t, DefaultValueTraits<size_t>> localHisto_;
-    Array<size_t, DefaultValueTraits<size_t>> splits_;
-};
-
 template<class Value, class ValueTraits, class Comp>
 void multiPartition(
     Span<Value> srcElems, const MultiPivot<Value, ValueTraits> &pivot, const Comp &comp,
-    Span<Value> dstElems, PartitionResult &result,
+    Span<Value> dstElems, Span<size_t> splits,
     size_t numWorkers, Span<uint8_t> bucketOf
 ) {
     size_t numBuckets = pivot.numBuckets_;
     size_t numElems = srcElems.size();
     
-    result.localHisto_.clearZero(numWorkers * numBuckets);
-    Span<size_t> localHisto = makeSpan(result.localHisto_);
+    size_t localHistoSmallStore[TBBSS_MAX_BUCKETS + 1];
+    Span<size_t> localHisto(localHistoSmallStore, numWorkers * numBuckets);
+    Array<size_t, DefaultValueTraits<size_t>> localHistoBigStore;
+    if (localHisto.size() > std::size(localHistoSmallStore)) {
+        localHistoBigStore.clearResize(localHisto.size());
+        localHisto = makeSpan(localHistoBigStore);
+    }
+    for (size_t i = 0; i < localHisto.size(); i++)
+        localHisto[i] = 0;
 
     parallelWorkers(numWorkers, [&pivot, numElems, numBuckets, numWorkers, srcElems, bucketOf, localHisto, &comp](size_t t) {
         size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
@@ -553,8 +554,10 @@ void multiPartition(
         }
     });
 
-    result.splits_.clearZero(numBuckets + 1);
-    Span<size_t> globalHisto = makeSpan(result.splits_);
+    assert(splits.size() == numBuckets + 1);
+    for (size_t i = 0; i < splits.size(); i++)
+        splits[i] = 0;
+    Span<size_t> globalHisto = splits;
 
     for (size_t t = 0; t < numWorkers; t++)
         for (size_t b = 0; b < numBuckets; b++)
@@ -623,7 +626,6 @@ void multiPartition(
     }
 
 #if TBBSS_TBBSS_SLOW_ASSERT
-    Span<const size_t> splits = globalHisto;
     assert(splits[0] == 0 && splits[numBuckets] == numElems);
     for (size_t b = 0; b < numBuckets; b++) {
         assert(splits[b] <= splits[b + 1]);
@@ -639,11 +641,6 @@ void multiPartition(
 
 template<class Value, class Comp, class ValueTraits>
 struct SharedData;
-
-template<class Value, class ValueTraits>
-struct ThreadData {
-    PartitionResult partition_;
-};
 
 template<class Value, class Comp, class ValueTraits>
 struct TaskData {
@@ -668,7 +665,6 @@ struct SharedData {
     const Comp *comparator_ = nullptr;
 
     uint64_t randomSeed_ = 0xDEADBEEF01234567ull;
-    tbb::enumerable_thread_specific<ThreadData<Value, ValueTraits>> perThread_;
 #if TBBSS_COLLECT_STATS
     std::atomic_int sizeStats_[64] = {};
     std::atomic_int taskStats_ = {};
@@ -744,18 +740,18 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
         });
     }
 
-    // note: we can't use threadlocal data before sorting samples
-    // because the recursive call can overwrite it
-    ThreadData<Value, ValueTraits> *perThread = &shared->perThread_.local();
     MultiPivot<Value, ValueTraits> pivot;
     pivot.initFromSortedSamples(srcElems.subspan(0, numSamples), numBuckets);
 
+    size_t splitsStore[TBBSS_MAX_BUCKETS + 1];
+    Span<size_t> splits(splitsStore, numBuckets + 1);
+    assert(splits.size() <= std::size(splitsStore));
+
     multiPartition(
         srcElems, pivot, *shared->comparator_,
-        dstElems, perThread->partition_,
+        dstElems, splits,
         task.numWorkers_, bucketOf
     );
-    Span<const size_t> splits = makeSpan(perThread->partition_.splits_);
 
     TaskData<Value, Comp, ValueTraits> subTask;
     subTask.shared_ = task.shared_;
