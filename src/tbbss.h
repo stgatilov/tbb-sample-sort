@@ -63,10 +63,7 @@ template<class Lambda> void parallelWorkers(size_t numWorkers, Lambda&& lambda) 
         lambda(0);
     }
     else {
-        // isolation ensures per-thread data is not overwritten
-        tbb::this_task_arena::isolate([&]{
-            tbb::parallel_for<size_t>(0, numWorkers, lambda);
-        });
+        tbb::parallel_for<size_t>(0, numWorkers, lambda);
     }
 }
 

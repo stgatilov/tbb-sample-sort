@@ -12,8 +12,8 @@
 #pragma pack(push, 1)
 struct Element {
     uint64_t key;
-    #if 1
-        uint32_t value;
+    #if 0
+        char value[4];
     #endif
 
     bool operator< (const Element &b) const {
