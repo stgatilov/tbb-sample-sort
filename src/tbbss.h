@@ -31,10 +31,6 @@
 //#define TBBSS_SLOW_ASSERT 1
 //#define TBBSS_COLLECT_STATS 1
 
-#if TBBSS_LARGE_PAGES
-    #include <sys/mman.h>
-#endif
-
 #if TBBSS_COLLECT_STATS
     #include <atomic>
     #define TBBSS_STATS_ADD(total, delta) total.fetch_add(delta, std::memory_order_relaxed)
@@ -91,31 +87,19 @@ struct Random {
 
 //---------------------------------------------------------
 
+void *allocateMemory(size_t bytes, size_t reqAlign);
+void deallocateMemory(void *ptr, size_t bytes, size_t reqAlign);
+
 template<class T> struct Allocator {
     static T *allocate(size_t n) {
         if (!n)
             return nullptr;
-        size_t bytes = n * sizeof(T);
-        size_t baseAlignment = 64;
-        bool useLargePages = false;
-#if TBBSS_LARGE_PAGES
-        if (bytes >= 8 * TBBSS_LARGE_PAGES) {
-            useLargePages = true;
-            baseAlignment = TBBSS_LARGE_PAGES;
-        }
-#endif
-        size_t alignment = std::max<size_t>(alignof(T), baseAlignment);
-        T *ptr = (T*) operator new[] (bytes, std::align_val_t(alignment));
-#if TBBSS_LARGE_PAGES
-        if (useLargePages)
-            madvise(ptr, bytes, MADV_HUGEPAGE);
-#endif
-        return ptr;
+        return reinterpret_cast<T*>(allocateMemory(n * sizeof(T), alignof(T)));
     }
     static void deallocate(T *ptr, size_t n) {
         if (!n)
             return;
-        operator delete[] (ptr);
+        return deallocateMemory(ptr, n * sizeof(T), alignof(T));
     }
 };
 

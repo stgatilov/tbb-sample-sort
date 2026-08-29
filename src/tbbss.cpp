@@ -7,6 +7,10 @@
 
 #include <xmmintrin.h>
 
+#if TBBSS_LARGE_PAGES
+    #include <sys/mman.h>
+#endif
+
 namespace tbbss {
 
 void memcpyUncached(char *dst, const char *src, size_t size) {
@@ -29,6 +33,28 @@ void memcpyUncached(char *dst, const char *src, size_t size) {
     }
 
     memcpy(dst, src, size);
+}
+
+void *allocateMemory(size_t bytes, size_t reqAlign) {
+    size_t baseAlignment = 64;
+    bool useLargePages = false;
+#if TBBSS_LARGE_PAGES
+    if (bytes >= 8 * TBBSS_LARGE_PAGES) {
+        useLargePages = true;
+        baseAlignment = TBBSS_LARGE_PAGES;
+    }
+#endif
+    size_t alignment = std::max<size_t>(reqAlign, baseAlignment);
+    void *ptr = operator new[] (bytes, std::align_val_t(alignment));
+#if TBBSS_LARGE_PAGES
+    if (useLargePages)
+        madvise(ptr, bytes, MADV_HUGEPAGE);
+#endif
+    return ptr;
+}
+
+void deallocateMemory(void *ptr, size_t bytes, size_t reqAlign) {
+    operator delete[] (ptr);
 }
 
 }
