@@ -38,6 +38,9 @@
 
 #if TBBSS_COLLECT_STATS
     #include <atomic>
+    #define TBBSS_STATS_ADD(total, delta) total.fetch_add(delta, std::memory_order_relaxed)
+#else
+    #define TBBSS_STATS_ADD(total, delta) (void(0))
 #endif
 
 namespace tbbss {
@@ -646,7 +649,8 @@ struct SharedData {
     uint64_t randomSeed_ = 0xDEADBEEF01234567ull;
     tbb::enumerable_thread_specific<ThreadData<Value, ValueTraits>> perThread_;
 #if TBBSS_COLLECT_STATS
-    std::atomic_int sizeStats_[64];
+    std::atomic_int sizeStats_[64] = {};
+    std::atomic_int taskStats_ = {};
 #endif
 };
 
@@ -680,9 +684,7 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
 
     assert(task.len_ > TBBSS_SMALLSORT_MAX);
     size_t logn = log2up(task.len_);
-#if TBBSS_COLLECT_STATS
-    shared->sizeStats_[logn].fetch_add(1, std::memory_order_relaxed);
-#endif
+    TBBSS_STATS_ADD(shared->sizeStats_[logn], 1);
 
     size_t numBuckets;
     if (task.len_ <= (1 << 12)) {
@@ -701,9 +703,7 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
     size_t numSamples = MultiPivot<Value, ValueTraits>::selectSamples(srcElems, numBuckets, task.random_);
 
     if (numSamples <= TBBSS_SMALLSORT_MAX) {
-#if TBBSS_COLLECT_STATS
-        shared->sizeStats_[log2up(numSamples)].fetch_add(1, std::memory_order_relaxed);
-#endif
+        TBBSS_STATS_ADD(shared->sizeStats_[log2up(numSamples)], 1);
         smallSort<Value, Comp, ValueTraits>(srcElems.subspan(0, numSamples), *shared->comparator_);
     }
     else {
@@ -717,6 +717,7 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
         samplesTask.whome_ = task.world_;
         samplesTask.numWorkers_ = 1;
         samplesTask.random_ = task.random_;
+        TBBSS_STATS_ADD(shared->taskStats_, 1);
         subTaskGroup.run_and_wait([samplesTask] {
             processRecursive(samplesTask);
         });
@@ -755,9 +756,7 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
         }
 
         if (subTask.len_ <= TBBSS_SMALLSORT_MAX) {
-#if TBBSS_COLLECT_STATS
-            shared->sizeStats_[log2up(subTask.len_)].fetch_add(1, std::memory_order_relaxed);
-#endif
+            TBBSS_STATS_ADD(shared->sizeStats_[log2up(subTask.len_)], 1);
             processBase(subTask);
             continue;
         }
@@ -767,6 +766,7 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
         else
             subTask.random_.initStream(task.shared_->randomSeed_, subTask.first_);
 
+        TBBSS_STATS_ADD(shared->taskStats_, 1);
         task.taskGroup_->run([subTask] {
             processRecursive(subTask);
         });
@@ -805,11 +805,13 @@ void sampleSort(Value *begin, size_t num, const Comp &comp = Comp()) {
     task.whome_ = 0;
     task.random_.initStream(shared.randomSeed_, task.first_);
 
+    TBBSS_STATS_ADD(shared.taskStats_, 1);
     rootTaskGroup.run_and_wait([&task] {
         processRecursive(task);
     });
 
 #if TBBSS_COLLECT_STATS
+    printf("TBB tasks: %d\n", shared.taskStats_.load());
     for (int i = 1; i < 32; i++)
         printf("L%02d: %7d [%zu..%zu)\n", i, shared.sizeStats_[i].load(), size_t(1) << (i-1), size_t(1) << i);
 #endif        
