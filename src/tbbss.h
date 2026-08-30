@@ -64,6 +64,15 @@ inline size_t log2up(size_t x) {
     return res;
 }
 
+// unfortunately, TBB is not thread-safe by default due to this issue:
+//   https://github.com/uxlfoundation/oneTBB/issues/253
+// in order to make it thread-safe, we have to explicitly check for cancellation after every TBB wait
+// otherwise TBB can continue a task despite its invariant "waited-upon tasks are finished" is broken
+inline void propagateCancelProperly() {
+    if (tbb::is_current_task_group_canceling())
+        throw 0;
+}
+
 template<class Lambda> void parallelWorkers(size_t numWorkers, Lambda&& lambda) {
     TBBSS_ASSERT(numWorkers > 0);
     if (numWorkers == 1) {
@@ -71,6 +80,7 @@ template<class Lambda> void parallelWorkers(size_t numWorkers, Lambda&& lambda) 
     }
     else {
         tbb::parallel_for<size_t>(0, numWorkers, lambda);
+        propagateCancelProperly();
     }
 }
 
@@ -750,6 +760,7 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
         subTaskGroup.run_and_wait([samplesTask] {
             processRecursive(samplesTask);
         });
+        propagateCancelProperly();
     }
 
     MultiPivot<Value, ValueTraits> pivot;

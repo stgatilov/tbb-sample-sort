@@ -108,18 +108,20 @@ TEST_CASE("AllocPrecheck") {
 TEST_CASE("AllocFails") {
     Random random;
     std::uniform_int_distribution<int> distr;
-    std::vector<int> arr = generateArray<int>(DEFAULT_ARRAY_SIZE, [&]{
+    std::vector<int> arr = generateArray<int>(32 << 20, [&]{
         return distr(random);
     });
 
     int numExceptions = 0;
     for (int i = 0; i < 30; i++) {
+        std::vector<int> temp = arr;
+
         checkAllocationsEmpty();
         failedNewIndex = i; // some allocation fails
         allocTracking.store(true);
 
         try {
-            tbbss::sampleSort(arr.data(), arr.size());
+            tbbss::sampleSort(temp.data(), temp.size());
         }
         catch(std::bad_alloc&) {
             numExceptions++;
@@ -130,6 +132,6 @@ TEST_CASE("AllocFails") {
         allocTracking.store(false);
         checkAllocationsEmpty();
     }
-    
+
     CHECK_GE(numExceptions, 10);
 }
