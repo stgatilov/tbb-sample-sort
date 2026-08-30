@@ -19,6 +19,7 @@
 #define TBBSS_CLASSIFY_UNROLL 8
 #define TBBSS_SMALLSORT_MAX 32
 #define TBBSS_MAX_BUCKETS 256
+#define TBBSS_BRANCHLESS_COMPARESWAP 1
 
 #define TBBSS_UNCACHED_MININPUT_BYTES (1 << 20)
 #define TBBSS_UNCACHED_BUFFER_BYTES (1 << 10)
@@ -162,6 +163,7 @@ template<class T> TBBSS_FORCEINLINE void memcpyElement(void *dst, const void *sr
 #endif
 }
 
+#if TBBSS_BRANCHLESS_COMPARESWAP
 template<class T> TBBSS_FORCEINLINE void memswapElementConditional(void *dst, void *src, bool doSwap) {
     int64_t mask = -int64_t(doSwap);
 
@@ -200,6 +202,7 @@ template<class T> TBBSS_FORCEINLINE void memswapElementConditional(void *dst, vo
         b ^= delta;
     }
 }
+#endif
 
 // "relocate" is Rust-style move
 // it moves an element into specified raw memory and makes source memory raw
@@ -247,13 +250,14 @@ struct DefaultValueTraits {
     }
 
     static TBBSS_FORCEINLINE void swapConditionalOne(T &dst, T &src, bool doSwap) noexcept {
-        if constexpr (IsRelocationTrivial == rtNone) {
-            if (doSwap)
-                swapOne(dst, src);
-        }
-        else {
+#if TBBSS_BRANCHLESS_COMPARESWAP        
+        if constexpr (IsRelocationTrivial != rtNone) {
             memswapElementConditional<T>(&dst, &src, doSwap);
+            return;
         }
+#endif
+        if (doSwap)
+            swapOne(dst, src);
     }
 
     static TBBSS_FORCEINLINE void constructCopyOne(T &dst, const T &src) noexcept {
