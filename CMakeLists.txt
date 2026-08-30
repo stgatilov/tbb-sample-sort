@@ -38,12 +38,13 @@ endif()
 
 if (TBBSS_BUILD_TESTS)
     find_package(doctest REQUIRED)
+    find_package(fmt REQUIRED)
     add_executable(tbbss_tests
         src/tests.cpp
         src/tests_framework.cpp
     )
     set_property(TARGET tbbss_tests PROPERTY CXX_STANDARD 17)
-    target_link_libraries(tbbss_tests PRIVATE tbbsamplesort doctest::doctest)
+    target_link_libraries(tbbss_tests PRIVATE tbbsamplesort doctest::doctest fmt::fmt)
     target_compile_definitions(tbbss_tests PRIVATE
         DOCTEST_CONFIG_NO_TRY_CATCH_IN_ASSERTS
     )
