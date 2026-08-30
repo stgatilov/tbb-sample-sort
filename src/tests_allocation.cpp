@@ -105,7 +105,7 @@ TEST_CASE("AllocPrecheck") {
     checkSorted(arr.data(), arr.size());
 }
 
-TEST_CASE("AllocFails") {
+TEST_CASE("AllocFailsInteger") {
     Random random;
     std::uniform_int_distribution<int> distr;
     std::vector<int> arr = generateArray<int>(32 << 20, [&]{
@@ -122,6 +122,48 @@ TEST_CASE("AllocFails") {
 
         try {
             tbbss::sampleSort(temp.data(), temp.size());
+        }
+        catch(std::bad_alloc&) {
+            numExceptions++;
+        }
+
+        // check that deallocations are correct
+        // but don't check that array is sorted
+        allocTracking.store(false);
+        checkAllocationsEmpty();
+    }
+
+    CHECK_GE(numExceptions, 10);
+}
+
+TEST_CASE("AllocFailsStdVector") {
+    typedef std::vector<int> Element;
+    Random random;
+    std::uniform_int_distribution<int> distrLen(1, 3);
+    std::uniform_int_distribution<int> distrElem(0, 1000);
+    std::vector<Element> arr = generateArray<Element>(10 << 20, [&]{
+        int l = distrLen(random);
+        Element res;
+        for (int i = 0; i < l; i++)
+            res.push_back(distrElem(random));
+        return res;
+    });
+
+    int numExceptions = 0;
+    for (int i = 0; i < 30; i++) {
+        std::vector<Element> temp = arr;
+
+        checkAllocationsEmpty();
+        failedNewIndex = i; // some allocation fails
+        allocTracking.store(true);
+
+        try {
+            tbbss::sampleSort<
+                Element, std::less<Element>,
+                // element lifetime is properly handled on exception
+                // ONLY when "fork" mode is used!
+                tbbss::DefaultValueTraits<Element, tbbss::rtFork>
+            >(temp.data(), temp.size());
         }
         catch(std::bad_alloc&) {
             numExceptions++;
