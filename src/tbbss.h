@@ -33,7 +33,6 @@
     #define TBBSS_NOINLINE __attribute__((noinline))
 #endif
 
-//#define TBBSS_SLOW_ASSERT 1
 //#define TBBSS_COLLECT_STATS 1
 
 #if TBBSS_COLLECT_STATS
@@ -432,7 +431,7 @@ struct MultiPivot {
     Raw<Value> treeStore_[TBBSS_MAX_BUCKETS];
 
     ~MultiPivot() {
-        ValueTraits::destroyMany(sortedStore_[0].data(), numBuckets_ - 1);
+        ValueTraits::destroyMany(sortedStore_[0].data(), numBuckets_);
         ValueTraits::destroyMany(treeStore_[0].data(), numBuckets_ - 1);
     }
 
@@ -454,13 +453,15 @@ struct MultiPivot {
     void initFromSortedSamples(Span<Value> samples, size_t numBuckets) {
         size_t numSamples = samples.size();
 
-        Span<Value> sorted(sortedStore_[0].data(), numBuckets - 1);
+        Span<Value> sorted(sortedStore_[0].data(), numBuckets);
         assert(sorted.size() <= std::size(sortedStore_));
 
         for (size_t i = 1; i <= numBuckets - 1; i++) {
             uint64_t pos = uint64_t(numSamples) * i / numBuckets;
-            ValueTraits::constructCopyOne(sorted[i - 1], samples[pos]);
+            ValueTraits::constructCopyOne(sorted[i], samples[pos]);
         }
+        // note: we prepend one sentinel element for branchless handling of equality buckets
+        ValueTraits::constructCopyOne(sorted[0], sorted[1]);
 
         size_t numBits = log2up(numBuckets);
 
@@ -470,7 +471,7 @@ struct MultiPivot {
         for (int b = numBits - 1; b >= 0; b--) {
             size_t len = (1 << b);
             for (size_t i = len - 1; i < numBuckets; i += len * 2)
-                ValueTraits::constructCopyOne(tree[filled++], sorted[i]);
+                ValueTraits::constructCopyOne(tree[filled++], sorted[i + 1]);
         }
         assert(filled == tree.size());
 
@@ -487,12 +488,12 @@ struct MultiPivot {
             res = 2 * res + 1 + size_t(!isLess);
         }
 
-        Span<const Value> sorted(sortedStore_[0].data(), numBuckets_ - 1);
+        Span<const Value> sorted(sortedStore_[0].data(), numBuckets_);
         res -= (numBuckets_ - 1);
-        assert(res == numBuckets_ - 1 || comp(value, sorted[res]));
-        assert(res == 0 || !comp(value, sorted[res - 1]));
+        assert(res == numBuckets_ - 1 || comp(value, sorted[res + 1]));
+        assert(res == 0 || !comp(value, sorted[res]));
 
-        res -= (res > 0 && !comp(sorted[res - 1], value));
+        res -= (res > 0) & !comp(sorted[res], value);
         assert(res < numBuckets_);
         return res;
     }
@@ -508,10 +509,10 @@ struct MultiPivot {
                 res[i] = 2 * res[i] + 1 + size_t(!isLess);
             }
         }
-        Span<const Value> sorted(sortedStore_[0].data(), numBuckets_ - 1);
+        Span<const Value> sorted(sortedStore_[0].data(), numBuckets_);
         for (size_t i = 0; i < N; i++) {
             res[i] -= (numBuckets_ - 1);
-            res[i] -= (res[i] > 0 && !comp(sorted[res[i] - 1], value[i]));
+            res[i] -= (res[i] > 0) & !comp(sorted[res[i]], value[i]);
         }
     }
 };
@@ -628,16 +629,15 @@ void multiPartition(
         });
     }
 
-#if TBBSS_TBBSS_SLOW_ASSERT
+    Span<const Value> sorted(pivot.sortedStore_[0].data(), numBuckets);
     assert(splits[0] == 0 && splits[numBuckets] == numElems);
     for (size_t b = 0; b < numBuckets; b++) {
         assert(splits[b] <= splits[b + 1]);
         for (size_t i = splits[b]; i < splits[b + 1]; i++) {
-            assert(b == 0 || !comp(dstElems[i], pivot.sorted_[b - 1]));
-            assert(b == numBuckets - 1 || !comp(pivot.sorted_[b], dstElems[i]));
+            assert(b == 0 || !comp(dstElems[i], sorted[b]));
+            assert(b == numBuckets - 1 || !comp(sorted[b + 1], dstElems[i]));
         }
     }
-#endif    
 }
 
 //---------------------------------------------------------
@@ -770,7 +770,7 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
             continue;
 
         const Comp &comp = *shared->comparator_;
-        if (b > 0 && b < numBuckets - 1 && !comp(pivot.sortedStore_[b - 1].get(), pivot.sortedStore_[b].get())) {
+        if (b > 0 && b < numBuckets - 1 && !comp(pivot.sortedStore_[b].get(), pivot.sortedStore_[b + 1].get())) {
             const Value &ref = pivot.sortedStore_[b].get();
             for (size_t i = splits[b]; i < splits[b + 1]; i++)
                 assert(!comp(dstElems[i], ref) && !comp(ref, dstElems[i]));
