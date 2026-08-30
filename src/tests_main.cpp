@@ -98,3 +98,58 @@ TEST_CASE("SortedEqual") {
 
     runAndValidateSampleSort(arr);
 }
+
+TEST_CASE("StdString") {
+    typedef std::string Element;
+    Random random;
+    std::uniform_int_distribution<int> distr;
+    std::vector<Element> arr = generateArray<Element>(DEFAULT_ARRAY_SIZE, [&]{
+        return std::to_string(distr(random));
+    });
+
+    // note: RelocationTrivialness::rtNone is required for std::string
+    // since it contains self-references due to SSO
+    runAndValidateSampleSort(arr);
+}
+
+TEST_CASE("StdVector") {
+    typedef std::vector<int> Element;
+    Random random;
+    std::uniform_int_distribution<int> distrLen(1, 3);
+    std::uniform_int_distribution<int> distrElem(0, 1000);
+    std::vector<Element> arr = generateArray<Element>(DEFAULT_ARRAY_SIZE, [&]{
+        int l = distrLen(random);
+        Element res;
+        for (int i = 0; i < l; i++)
+            res.push_back(distrElem(random));
+        return res;
+    });
+
+    tbbss::sampleSort<
+        Element, std::less<Element>,
+        // note: std::vector is trivially relocatable and copyable
+        // any RelocationTrivialness mode should work, although "fork" is preferred
+        tbbss::DefaultValueTraits<Element, tbbss::rtRelocate>
+    > (arr.data(), arr.size());
+    checkSorted(arr.data(), arr.size());
+}
+
+TEST_CASE("StdUniquePtr") {
+    typedef std::unique_ptr<int> Element;
+    Random random;
+    std::uniform_int_distribution<int> distr;
+    std::vector<Element> arr = generateArray<Element>(DEFAULT_ARRAY_SIZE, [&]{
+        return std::make_unique<int>(distr(random));
+    });
+    auto comparator = [](const Element& a, const Element& b) {
+        return *a < *b;
+    };
+
+    tbbss::sampleSort<
+        Element, std::decay_t<decltype(comparator)>,
+        // note: this type is no-copyable, thus "fork" mode is required to compile
+        // luckily, std::unique_ptr is indeed trivially relocatable
+        tbbss::DefaultValueTraits<Element, tbbss::rtFork>
+    > (arr.data(), arr.size(), comparator);
+    checkSorted(arr.data(), arr.size(), comparator);
+}

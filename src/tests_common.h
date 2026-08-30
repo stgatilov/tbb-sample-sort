@@ -4,6 +4,8 @@
 #include <tbbss.h>
 
 #include <vector>
+#include <string>
+#include <memory>
 #include <random>
 
 #include <fmt/format.h>
@@ -56,6 +58,28 @@ template<class Key, size_t ValueBytes> void fillValue(IntegerElement<Key, ValueB
 
 //----------------------------------------------------------------------------------------------
 
+template<class T, typename = std::enable_if_t<std::is_integral_v<T>>> int totalCompare(const T &a, const T &b) {
+    if (a != b)
+        return a < b ? -1 : 1;
+    return 0;
+}
+
+template<class T, typename = std::enable_if_t<std::is_integral_v<T>>> int totalCompare(const std::unique_ptr<T> &a, const std::unique_ptr<T> &b) {
+    return totalCompare(*a, *b);
+}
+
+inline int totalCompare(const std::string &a, const std::string &b) {
+    return a.compare(b);
+}
+
+template<class T> struct TotalLess {
+    bool operator() (const T &a, const T &b) const {
+        return totalCompare(a, b) < 0;
+    }
+};
+
+//----------------------------------------------------------------------------------------------
+
 template<class T, class Comparator = std::less<T>> void checkSorted(T *begin, size_t n, const Comparator &comp = Comparator()) {
     std::vector<size_t> badpos;
     for (size_t i = 1; i < n; i++)
@@ -73,18 +97,6 @@ template<class T, class Comparator = std::less<T>> void checkUnsorted(T *begin, 
 
     WARN_MESSAGE(!badpos.empty(), "array is sorted unexpectedly");
 }
-
-template<class T, typename = std::enable_if_t<std::is_integral_v<T>>> int totalCompare(const T &a, const T &b) {
-    if (a != b)
-        return a < b ? -1 : 1;
-    return 0;
-}
-
-template<class T> struct TotalLess {
-    bool operator() (const T &a, const T &b) const {
-        return totalCompare(a, b) < 0;
-    }
-};
 
 template<class T> void checkExactlyEqual(T *begin1, T *begin2, size_t n) {
     std::vector<size_t> badpos;
