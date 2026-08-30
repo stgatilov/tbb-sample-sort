@@ -1,10 +1,10 @@
 {
     "configurations": [
         {
-            "name": "Launch: Debug",
+            "name": "Playground: Debug",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceRoot}/build/Debug/tbbsamplesort",
+            "program": "${workspaceRoot}/build/Debug/tbbss_playground_run",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}",
@@ -25,10 +25,10 @@
             ]
         },
         {
-            "name": "Launch: Release",
+            "name": "Playground: Release",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceRoot}/build/Release/tbbsamplesort",
+            "program": "${workspaceRoot}/build/Release/tbbss_playground_run",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}",
@@ -49,23 +49,14 @@
             ]
         },
         {
-            "name": "Launch: Release + gperftools",
+            "name": "Tests: Debug",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceRoot}/build/Release/tbbsamplesort",
+            "program": "${workspaceRoot}/build/Debug/tbbss_tests",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}",
-            "environment": [
-                {
-                    "name": "LD_PRELOAD",
-                    "value": "/usr/lib/x86_64-linux-gnu/libprofiler.so.0",
-                },
-                {
-                    "name": "CPUPROFILE",
-                    "value": "gperftoolstrace.prof",
-                },
-            ],
+            "environment": [],
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [
@@ -80,7 +71,31 @@
                     "ignoreFailures": true
                 }
             ]
-        }
+        },
+        {
+            "name": "Tests: Release",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceRoot}/build/Release/tbbss_tests",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceRoot}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set Disassembly Flavor to Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                }
+            ]
+        },
     ],
     "version": "2.0.0"
 }
