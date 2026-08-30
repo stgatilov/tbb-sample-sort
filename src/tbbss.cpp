@@ -66,7 +66,7 @@ void *allocateMemory(size_t bytes, size_t reqAlign) {
 
 void deallocateMemory(void *ptr, size_t bytes, size_t reqAlign) {
     auto [alignment, useLargePages] = selectAlignment(bytes, reqAlign);
-    operator delete (ptr, std::align_val_t(alignment));
+    operator delete (ptr, bytes, std::align_val_t(alignment));
 }
 
 }
