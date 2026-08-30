@@ -831,4 +831,13 @@ void sampleSort(Value *begin, size_t num, const Comp &comp = Comp()) {
 #endif        
 }
 
+template<
+    class Value,
+    class Comp = std::less<Value>,
+    class ValueTraits = DefaultValueTraits<Value>
+>
+void sampleSortIter(Value *begin, Value *end, const Comp &comp = Comp()) {
+    return sampleSort(begin, end- begin, comp);
+}
+
 }
