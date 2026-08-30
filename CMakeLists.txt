@@ -43,6 +43,7 @@ if (TBBSS_BUILD_TESTS)
         src/tests_common.h
         src/tests_main.cpp
         src/tests_element.cpp
+        src/tests_allocation.cpp
         src/tests_framework.cpp
     )
     set_property(TARGET tbbss_tests PROPERTY CXX_STANDARD 17)
