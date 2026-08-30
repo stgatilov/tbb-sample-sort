@@ -403,7 +403,7 @@ inline Span<const T> makeSpan(const Array<T, ValueTraits> &arr) { return {arr.da
 
 template<class Value, class Comp, class ValueTraits> void smallSort(Span<Value> arr, const Comp &comp) {
 #if 0
-    std::sort(arr.data(), arr.data() + arr.size(), comp);
+    std::sort(arr.data(), arr.data() + arr.size(), std::reference_wrapper(comp));
 #else
     Raw<Value> buffer;
     for (size_t i = 1; i < arr.size(); i++) {
@@ -414,7 +414,7 @@ template<class Value, class Comp, class ValueTraits> void smallSort(Span<Value> 
         ValueTraits::relocateOne(arr[i], arrI);
     }
 
-    assert(std::is_sorted(arr.data(), arr.data() + arr.size(), comp));                
+    assert(std::is_sorted(arr.data(), arr.data() + arr.size(), std::reference_wrapper(comp))); 
 #endif
 }
 
@@ -801,6 +801,7 @@ void sampleSort(Value *begin, size_t num, const Comp &comp = Comp()) {
     }
 
     SharedData<Value, Comp, ValueTraits> shared;
+    shared.comparator_ = &comp;
     shared.elemsCopyStore_.clearResize(num);
     shared.bucketIndexStore_.clearResize(num);
     shared.numElems_ = num;
