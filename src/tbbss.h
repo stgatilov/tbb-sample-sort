@@ -606,7 +606,7 @@ void multiPartition(
                 if (bufCnt[b] == 0)
                     continue;
                 size_t &pos = localHisto[t * numBuckets + b];
-                ValueTraits::relocateMany(&dstElems[pos], buffer[b][0].data(), bufCnt[b]);
+                ValueTraits::relocateManyUncached(&dstElems[pos], buffer[b][0].data(), bufCnt[b]);
                 pos += bufCnt[b];
             }
         });
