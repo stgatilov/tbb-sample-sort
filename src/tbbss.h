@@ -25,6 +25,9 @@
 #define TBBSS_UNCACHED_BUFFER_BYTES (1 << 10)
 #define TBBSS_LARGE_PAGES (2 << 20)
 
+//#define TBBSS_DROP_ASSERTS 1
+//#define TBBSS_COLLECT_STATS 1
+
 #ifdef _MSC_VER
     #define TBBSS_FORCEINLINE __forceinline
     #define TBBSS_NOINLINE __declspec(noinline)
@@ -33,7 +36,11 @@
     #define TBBSS_NOINLINE __attribute__((noinline))
 #endif
 
-//#define TBBSS_COLLECT_STATS 1
+#if TBBSS_DROP_ASSERTS
+    #define TBBSS_ASSERT(...) (void(0))
+#else
+    #define TBBSS_ASSERT(...) assert(__VA_ARGS__)
+#endif
 
 #if TBBSS_COLLECT_STATS
     #include <atomic>
@@ -58,7 +65,7 @@ inline size_t log2up(size_t x) {
 }
 
 template<class Lambda> void parallelWorkers(size_t numWorkers, Lambda&& lambda) {
-    assert(numWorkers > 0);
+    TBBSS_ASSERT(numWorkers > 0);
     if (numWorkers == 1) {
         lambda(0);
     }
@@ -97,7 +104,7 @@ struct Random {
     void init(size_t start, size_t len, uint64_t seed) {
         s[0] = start ^ seed;
         s[1] = len;
-        assert(len != 0);
+        TBBSS_ASSERT(len != 0);
         next();
     }
 
@@ -278,14 +285,14 @@ struct DefaultValueTraits {
     }
 
     static void relocateMany(T *dst, T *src, size_t n) noexcept {
-        assert(dst >= src + n || src >= dst + n);
+        TBBSS_ASSERT(dst >= src + n || src >= dst + n);
         for (size_t i = 0; i < n; i++)
             relocateOne(dst[i], src[i]);
     }
     static void relocateManyUncached(T *dst, T *src, size_t n) noexcept {
         if constexpr (IsRelocationTrivial == rtNone)
             return relocateMany(dst, src, n);
-        assert(dst >= src + n || src >= dst + n);
+        TBBSS_ASSERT(dst >= src + n || src >= dst + n);
         memcpyUncached(reinterpret_cast<char*>(dst), reinterpret_cast<const char*>(src), n * sizeof(T));
     }
     static void destroyMany(T *dst, size_t n) noexcept {
@@ -310,8 +317,8 @@ template<class T, class ValueTraits> class Array {
     size_t cap_ = 0;
 
     TBBSS_NOINLINE void grow(size_t n) {
-        assert(n > cap_);
-        assert(num_ == 0);
+        TBBSS_ASSERT(n > cap_);
+        TBBSS_ASSERT(num_ == 0);
         n = std::max(n, 2 * cap_ + 1);
         Allocator<T>::deallocate(ptr_, cap_);
         ptr_ = Allocator<T>::allocate(n);
@@ -343,7 +350,7 @@ public:
     }
 
     TBBSS_FORCEINLINE void pushBack(const T& x) {
-        assert(num_ < cap_);
+        TBBSS_ASSERT(num_ < cap_);
         ValueTraits::constructCopyOne(ptr_[num_++], x);
     }
 
@@ -352,11 +359,11 @@ public:
     TBBSS_FORCEINLINE size_t size() const { return num_; }
 
     TBBSS_FORCEINLINE T &operator[] (size_t i) {
-        assert(i < num_);
+        TBBSS_ASSERT(i < num_);
         return ptr_[i];
     }
     TBBSS_FORCEINLINE const T &operator[] (size_t i) const {
-        assert(i < num_);
+        TBBSS_ASSERT(i < num_);
         return ptr_[i];
     }
 
@@ -387,12 +394,12 @@ public:
     TBBSS_FORCEINLINE size_t size() const { return num_; }
 
     TBBSS_FORCEINLINE T &operator[] (size_t i) const {
-        assert(i < num_);
+        TBBSS_ASSERT(i < num_);
         return ptr_[i];
     }
 
     TBBSS_FORCEINLINE Span<T> subspan(size_t start, size_t len) const {
-        assert(start + len <= num_);
+        TBBSS_ASSERT(start + len <= num_);
         return {ptr_ + start, len};
     }
 };
@@ -417,7 +424,7 @@ template<class Value, class Comp, class ValueTraits> void smallSort(Span<Value> 
         ValueTraits::relocateOne(arr[i], arrI);
     }
 
-    assert(std::is_sorted(arr.data(), arr.data() + arr.size(), std::reference_wrapper(comp))); 
+    TBBSS_ASSERT(std::is_sorted(arr.data(), arr.data() + arr.size(), std::reference_wrapper(comp))); 
 #endif
 }
 
@@ -436,7 +443,7 @@ struct MultiPivot {
     }
 
     static size_t selectSamples(Span<Value> arr, size_t numBuckets, Random &random) {
-        assert(isPot(numBuckets) && numBuckets >= 2);
+        TBBSS_ASSERT(isPot(numBuckets) && numBuckets >= 2);
         size_t numElems = arr.size();
 
         size_t numSamples = numBuckets * log2up(numElems) / 5;
@@ -454,7 +461,7 @@ struct MultiPivot {
         size_t numSamples = samples.size();
 
         Span<Value> sorted(sortedStore_[0].data(), numBuckets);
-        assert(sorted.size() <= std::size(sortedStore_));
+        TBBSS_ASSERT(sorted.size() <= std::size(sortedStore_));
 
         for (size_t i = 1; i <= numBuckets - 1; i++) {
             uint64_t pos = uint64_t(numSamples) * i / numBuckets;
@@ -466,14 +473,14 @@ struct MultiPivot {
         size_t numBits = log2up(numBuckets);
 
         Span<Value> tree(treeStore_[0].data(), numBuckets - 1);
-        assert(tree.size() <= std::size(treeStore_));
+        TBBSS_ASSERT(tree.size() <= std::size(treeStore_));
         size_t filled = 0;
         for (int b = numBits - 1; b >= 0; b--) {
             size_t len = (1 << b);
             for (size_t i = len - 1; i < numBuckets; i += len * 2)
                 ValueTraits::constructCopyOne(tree[filled++], sorted[i + 1]);
         }
-        assert(filled == tree.size());
+        TBBSS_ASSERT(filled == tree.size());
 
         numBuckets_ = numBuckets;
         numBits_ = numBits;        
@@ -490,11 +497,11 @@ struct MultiPivot {
 
         Span<const Value> sorted(sortedStore_[0].data(), numBuckets_);
         res -= (numBuckets_ - 1);
-        assert(res == numBuckets_ - 1 || comp(value, sorted[res + 1]));
-        assert(res == 0 || !comp(value, sorted[res]));
+        TBBSS_ASSERT(res == numBuckets_ - 1 || comp(value, sorted[res + 1]));
+        TBBSS_ASSERT(res == 0 || !comp(value, sorted[res]));
 
         res -= (res > 0) & !comp(sorted[res], value);
-        assert(res < numBuckets_);
+        TBBSS_ASSERT(res < numBuckets_);
         return res;
     }
 
@@ -558,7 +565,7 @@ void multiPartition(
         }
     });
 
-    assert(splits.size() == numBuckets + 1);
+    TBBSS_ASSERT(splits.size() == numBuckets + 1);
     for (size_t i = 0; i < splits.size(); i++)
         splits[i] = 0;
     Span<size_t> globalHisto = splits;
@@ -569,7 +576,7 @@ void multiPartition(
 
     for (size_t b = 0; b < numBuckets; b++)
         globalHisto[b + 1] += globalHisto[b];
-    assert(globalHisto[numBuckets] == numElems);
+    TBBSS_ASSERT(globalHisto[numBuckets] == numElems);
 
     for (size_t b = 0; b < numBuckets; b++) {
         size_t tsum = globalHisto[b];
@@ -578,7 +585,7 @@ void multiPartition(
             localHisto[t * numBuckets + b] = tsum;
             tsum = nsum;
         }
-        assert(tsum == globalHisto[b + 1]);
+        TBBSS_ASSERT(tsum == globalHisto[b + 1]);
     }
     
     bool scatterSimple = true;
@@ -630,12 +637,12 @@ void multiPartition(
     }
 
     Span<const Value> sorted(pivot.sortedStore_[0].data(), numBuckets);
-    assert(splits[0] == 0 && splits[numBuckets] == numElems);
+    TBBSS_ASSERT(splits[0] == 0 && splits[numBuckets] == numElems);
     for (size_t b = 0; b < numBuckets; b++) {
-        assert(splits[b] <= splits[b + 1]);
+        TBBSS_ASSERT(splits[b] <= splits[b + 1]);
         for (size_t i = splits[b]; i < splits[b + 1]; i++) {
-            assert(b == 0 || !comp(dstElems[i], sorted[b]));
-            assert(b == numBuckets - 1 || !comp(sorted[b + 1], dstElems[i]));
+            TBBSS_ASSERT(b == 0 || !comp(dstElems[i], sorted[b]));
+            TBBSS_ASSERT(b == numBuckets - 1 || !comp(sorted[b + 1], dstElems[i]));
         }
     }
 }
@@ -701,7 +708,7 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
     Span<Value> dstElems = shared->elemsSpans_[task.world_ ^ 1].subspan(task.first_, task.len_);
     Span<uint8_t> bucketOf = makeSpan(shared->bucketIndexStore_).subspan(task.first_, task.len_);
 
-    assert(task.len_ > TBBSS_SMALLSORT_MAX);
+    TBBSS_ASSERT(task.len_ > TBBSS_SMALLSORT_MAX);
     size_t logn = log2up(task.len_);
     TBBSS_STATS_ADD(shared->sizeStats_[logn], 1);
 
@@ -717,7 +724,7 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
         numBuckets = 1 << logb;
         numBuckets = std::min<size_t>(numBuckets, TBBSS_MAX_BUCKETS);
     }
-    assert(numBuckets >= 2 && numBuckets <= TBBSS_MAX_BUCKETS && isPot(numBuckets));
+    TBBSS_ASSERT(numBuckets >= 2 && numBuckets <= TBBSS_MAX_BUCKETS && isPot(numBuckets));
 
     Random random;
     random.init(task.first_, task.len_, shared->randomSeed_);
@@ -748,7 +755,7 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
 
     size_t splitsStore[TBBSS_MAX_BUCKETS + 1];
     Span<size_t> splits(splitsStore, numBuckets + 1);
-    assert(splits.size() <= std::size(splitsStore));
+    TBBSS_ASSERT(splits.size() <= std::size(splitsStore));
 
     multiPartition(
         srcElems, pivot, *shared->comparator_,
@@ -773,7 +780,7 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
         if (b > 0 && b < numBuckets - 1 && !comp(pivot.sortedStore_[b].get(), pivot.sortedStore_[b + 1].get())) {
             const Value &ref = pivot.sortedStore_[b].get();
             for (size_t i = splits[b]; i < splits[b + 1]; i++)
-                assert(!comp(dstElems[i], ref) && !comp(ref, dstElems[i]));
+                TBBSS_ASSERT(!comp(dstElems[i], ref) && !comp(ref, dstElems[i]));
             copyBack(subTask);
             continue;
         }
