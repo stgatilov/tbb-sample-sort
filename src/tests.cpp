@@ -72,6 +72,12 @@ template<class T, class Comparator = std::less<T>> void checkUnsorted(T *begin, 
     WARN_MESSAGE(!badpos.empty(), "array is sorted unexpectedly");
 }
 
+template<class T, typename = std::enable_if_t<std::is_integral_v<T>>> int totalCompare(const T &a, const T &b) {
+    if (a != b)
+        return a < b ? -1 : 1;
+    return 0;
+}
+
 template<class T> struct TotalLess {
     bool operator() (const T &a, const T &b) const {
         return totalCompare(a, b) < 0;
@@ -166,6 +172,39 @@ TEST_CASE("Equal17") {
         fillValue(x, random);
         return x;
     });
+    runAndValidateSampleSort(arr);
+}
+
+
+TEST_CASE("SortedIncr") {
+    Random random;
+    std::uniform_int_distribution<int> distr;
+    std::vector<int> arr = generateArray<int>(DEFAULT_ARRAY_SIZE, [&]{
+        return distr(random);
+    });
+    std::sort(arr.data(), arr.data() + arr.size());
+
+    runAndValidateSampleSort(arr);
+}
+
+TEST_CASE("SortedDecr") {
+    Random random;
+    std::uniform_int_distribution<int> distr;
+    std::vector<int> arr = generateArray<int>(DEFAULT_ARRAY_SIZE, [&]{
+        return distr(random);
+    });
+    std::sort(arr.data(), arr.data() + arr.size(), std::greater<int>());
+
+    runAndValidateSampleSort(arr);
+}
+
+TEST_CASE("SortedEqual") {
+    Random random;
+    std::uniform_int_distribution<int> distr;
+    std::vector<int> arr = generateArray<int>(DEFAULT_ARRAY_SIZE, [&]{
+        return 42;
+    });
+
     runAndValidateSampleSort(arr);
 }
 
