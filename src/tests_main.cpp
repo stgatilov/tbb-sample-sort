@@ -1,6 +1,10 @@
 #include "tests_common.h"
 
+#include <condition_variable>
+#include <atomic>
+
 #include <tbb/parallel_for.h>
+#include <tbb/task_group.h>
 
 TEST_CASE("Simple") {
     Random random;
@@ -228,4 +232,55 @@ TEST_CASE("ParallelSorts") {
         std::sort(check.data() + beg, check.data() + end);
     });
     checkExactlyEqual(arr.data(), check.data(), arr.size());
+}
+
+void TbbSleepTest(int numSleeping) {
+    Random random;
+    std::uniform_int_distribution<int> distr;
+    std::vector<int> arr = generateArray<int>(DEFAULT_ARRAY_SIZE, [&]{
+        return distr(random);
+    });
+
+    tbb::task_group sortGroup, waitGroup;
+    std::condition_variable variable;
+    std::mutex mutex;
+    std::atomic_bool finished = false;
+    auto waitUntilFinished = [&] {
+        std::unique_lock lock(mutex);
+        variable.wait(lock, [&]{ return finished.load(); });
+    };
+
+    // block specified number of threads (one of them = main thread)
+    assert(numSleeping >= 1);
+
+    for (int t = 0; t < numSleeping - 1; t++) {
+        waitGroup.run([&] {
+            waitUntilFinished();
+        });
+    }
+    sortGroup.run([&] {
+        tbbss::sampleSort(arr.data(), arr.size());
+        finished.store(true);
+        variable.notify_all();
+    });
+    // block main thread as well
+    waitUntilFinished();
+
+    sortGroup.wait();
+    waitGroup.wait();
+    checkSorted(arr.data(), arr.size());
+}
+
+TEST_CASE("TbbSleep1") {
+    // we limit number of actually available TBB threads to 1
+    // the algorithm runs more tasks than threads but does not deadlock
+    TbbSleepTest(tbb::this_task_arena::max_concurrency() - 1);
+}
+
+TEST_CASE("TbbSleep0"
+    * doctest::skip()
+    * doctest::should_fail()
+) {
+    // we block all threads, thus sorting task never starts and we get deadlock
+    TbbSleepTest(tbb::this_task_arena::max_concurrency());
 }
