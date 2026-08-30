@@ -40,7 +40,9 @@ if (TBBSS_BUILD_TESTS)
     find_package(doctest REQUIRED)
     find_package(fmt REQUIRED)
     add_executable(tbbss_tests
-        src/tests.cpp
+        src/tests_common.h
+        src/tests_main.cpp
+        src/tests_element.cpp
         src/tests_framework.cpp
     )
     set_property(TARGET tbbss_tests PROPERTY CXX_STANDARD 17)
