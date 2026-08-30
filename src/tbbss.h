@@ -596,19 +596,21 @@ void multiPartition(
             size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
             size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
 
-            static_assert(sizeof(Value) <= TBBSS_UNCACHED_BUFFER_BYTES);
-            Raw<Value> buffer[TBBSS_MAX_BUCKETS][TBBSS_UNCACHED_BUFFER_BYTES / sizeof(Value)];
-            
             uint32_t bufCnt[TBBSS_MAX_BUCKETS];
             for (size_t b = 0; b < numBuckets; b++)
                 bufCnt[b] = 0;
 
+            constexpr size_t Lane = TBBSS_UNCACHED_BUFFER_BYTES / sizeof(Value);
+            static_assert(Lane > 0);
+            Array<Raw<Value>, DefaultValueTraits<Raw<Value>>> buffer;
+            buffer.clearResize(TBBSS_MAX_BUCKETS * Lane);
+
             for (size_t i = l; i < r; i++) {
                 size_t b = bucketOf[i];
-                ValueTraits::relocateOne(buffer[b][bufCnt[b]++].get(), srcElems[i]);
-                if (bufCnt[b] == TBBSS_UNCACHED_BUFFER_BYTES / sizeof(Value)) {
+                ValueTraits::relocateOne(buffer[b * Lane + (bufCnt[b]++)].get(), srcElems[i]);
+                if (bufCnt[b] == Lane) {
                     size_t &pos = localHisto[t * numBuckets + b];
-                    ValueTraits::relocateManyUncached(&dstElems[pos], buffer[b][0].data(), bufCnt[b]);
+                    ValueTraits::relocateManyUncached(&dstElems[pos], buffer[b * Lane].data(), bufCnt[b]);
                     pos += bufCnt[b];
                     bufCnt[b] = 0;
                 }
@@ -618,7 +620,7 @@ void multiPartition(
                 if (bufCnt[b] == 0)
                     continue;
                 size_t &pos = localHisto[t * numBuckets + b];
-                ValueTraits::relocateManyUncached(&dstElems[pos], buffer[b][0].data(), bufCnt[b]);
+                ValueTraits::relocateManyUncached(&dstElems[pos], buffer[b * Lane].data(), bufCnt[b]);
                 pos += bufCnt[b];
             }
         });
