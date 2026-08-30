@@ -3,7 +3,7 @@ project(tbbsamplesort CXX)
 
 option(TBBSS_BUILD_PLAYGROUND "Build playground executables to generate some data and run sort on it" ON)
 option(TBBSS_BUILD_TESTS "Build tests: requires more packages" ON)
-
+set(TBBSS_SANITIZE "" CACHE STRING "Build with -fsanitize=XYZ")
 
 # make sure Release build has debug info and is not slowed down because of it
 if(MSVC)
@@ -13,6 +13,12 @@ elseif(UNIX)
 	add_compile_options("$<$<CONFIG:Release>:-g>")
 endif()
 
+# enable sanitizer
+if (NOT TBBSS_SANITIZE STREQUAL "")
+    message("Added: -fsanitize=${TBBSS_SANITIZE}")
+    add_compile_options(-fsanitize=address)
+    add_link_options(-fsanitize=address)
+endif()
 
 find_package(TBB REQUIRED)
 add_library(tbbsamplesort
