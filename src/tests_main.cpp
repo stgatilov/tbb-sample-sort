@@ -284,3 +284,23 @@ TEST_CASE("TbbSleep0"
     // we block all threads, thus sorting task never starts and we get deadlock
     TbbSleepTest(tbb::this_task_arena::max_concurrency());
 }
+
+#if SIZE_MAX >= UINT64_MAX  // 64-bit architecture only
+TEST_CASE("Index64Bit"
+    // uses gigabytes of RAM and takes about a minute (with optimization)
+    // hence disabled by default
+    * doctest::skip()
+) {
+    constexpr size_t NumElems = size_t(2) << 32;
+    typedef uint16_t Element;
+
+    Random random;
+    std::uniform_int_distribution<Element> distr;
+    std::vector<Element> arr = generateArray<Element>(NumElems, [&]{
+        return distr(random);
+    });
+
+    tbbss::sampleSort(arr.data(), arr.size());
+    checkSorted(arr.data(), arr.size());
+}
+#endif
