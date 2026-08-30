@@ -1,5 +1,7 @@
 #include "tests_common.h"
 
+#include <tbb/parallel_for.h>
+
 TEST_CASE("Simple") {
     Random random;
     std::uniform_int_distribution<int> distr;
@@ -50,6 +52,7 @@ TEST_CASE("Equal1000") {
         fillValue(x, random);
         return x;
     });
+
     runAndValidateSampleSort(arr);
 }
 
@@ -63,6 +66,7 @@ TEST_CASE("Equal17") {
         fillValue(x, random);
         return x;
     });
+
     runAndValidateSampleSort(arr);
 }
 
@@ -152,4 +156,76 @@ TEST_CASE("StdUniquePtr") {
         tbbss::DefaultValueTraits<Element, tbbss::rtFork>
     > (arr.data(), arr.size(), comparator);
     checkSorted(arr.data(), arr.size(), comparator);
+}
+
+TEST_CASE("Determinism") {
+    typedef IntegerElement<int16_t, 2> Element;
+    Random random;
+    std::uniform_int_distribution<int> distr(1000, 2000);
+    std::vector<Element> arr = generateArray<Element>(DEFAULT_ARRAY_SIZE, [&]{
+        Element x;
+        x.key = distr(random);
+        fillValue(x, random);
+        return x;
+    });
+
+    // check that output is exactly the same on repeated runs of the function
+    // (input contains many equal elements, otherwise sorted output is unique anyway)
+    std::vector<Element> firstOutput;
+    for (int r = 0; r < 20; r++) {
+        std::vector<Element> copy = arr;
+        tbbss::sampleSort(copy.data(), copy.size());
+        if (firstOutput.empty())
+            firstOutput = copy;
+        checkExactlyEqual(firstOutput.data(), copy.data(), arr.size());
+    }
+
+    // compare hash of the output against prerecorded hash
+    // this ensures determinism across platforms as well
+    static const uint32_t MOD = (1u << 31) - 1;
+    static const uint32_t BASE = 3;
+    uint32_t hash = 0;
+    for (const Element &x : firstOutput) {
+        static_assert(sizeof(x) == 4);
+        uint32_t raw = *reinterpret_cast<const uint32_t*>(&x);
+        hash = (uint64_t(hash) * BASE + raw) % MOD;
+    }
+
+    constexpr uint32_t PRERECORDED = 1655954255u;
+    CHECK_EQ(hash, PRERECORDED);
+    //WARN_MESSAGE(false, "Determinism output hash: ", hash);
+}
+
+TEST_CASE("ParallelSorts") {
+    static constexpr int Tasks = 20;
+    typedef IntegerElement<int32_t, 0> Element;
+    Random random;
+    std::uniform_int_distribution<int> distr(0, DEFAULT_ARRAY_SIZE / 3);
+    std::vector<Element> arr = generateArray<Element>(DEFAULT_ARRAY_SIZE * Tasks, [&]{
+        Element x;
+        x.key = distr(random);
+        fillValue(x, random);
+        return x;
+    });
+
+    std::uniform_int_distribution<size_t> distrSplit(0, arr.size() - 1);
+    std::vector<size_t> splits = {0, arr.size()};
+    for (int t = 0; t < Tasks - 1; t++)
+        splits.push_back(distrSplit(random));
+    std::sort(splits.begin(), splits.end());
+
+    std::vector<Element> check = arr;
+    // check running many independent sorts as TBB tasks
+    // inaccurate usage of threadlocal can break this use case
+    tbb::parallel_for<int>(0, Tasks, [&](int t) {
+        size_t beg = splits[t + 0];
+        size_t end = splits[t + 1];
+        tbbss::sampleSortIter(arr.data() + beg, arr.data() + end);
+    });
+    tbb::parallel_for<int>(0, Tasks, [&](int t) {
+        size_t beg = splits[t + 0];
+        size_t end = splits[t + 1];
+        std::sort(check.data() + beg, check.data() + end);
+    });
+    checkExactlyEqual(arr.data(), check.data(), arr.size());
 }
