@@ -112,7 +112,11 @@ TEST_CASE("StdString") {
     Random random;
     std::uniform_int_distribution<int> distr;
     std::vector<Element> arr = generateArray<Element>(DEFAULT_ARRAY_SIZE, [&]{
-        return std::to_string(distr(random));
+        std::string res = std::to_string(distr(random));
+        // make sure some strings are dynamically allocated
+        if ((random() & 3) == 0)
+            res = res + res + res + res;
+        return res;
     });
 
     // note: RelocationTrivialness::rtNone is required for std::string
