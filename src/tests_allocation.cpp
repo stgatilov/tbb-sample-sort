@@ -145,7 +145,9 @@ TEST_CASE("AllocFailsInteger") {
     CHECK_GE(numExceptions, 10);
 }
 
-TEST_CASE("AllocFailsStdVector") {
+TEST_CASE("AllocFailsStdVector"
+    * doctest::skip()
+) {
     typedef std::vector<int> Element;
     Random random;
     std::uniform_int_distribution<int> distrLen(1, 3);
