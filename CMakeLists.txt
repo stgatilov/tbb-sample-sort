@@ -13,6 +13,14 @@ elseif(UNIX)
 	add_compile_options("$<$<CONFIG:Release>:-g>")
 endif()
 
+# check for all the annoying warnings
+if(MSVC)
+    add_compile_options("/W4")
+    add_compile_definitions("_CRT_SECURE_NO_WARNINGS")
+elseif(UNIX)
+    add_compile_options("-Wall")
+endif()
+
 # enable sanitizer
 if (NOT TBBSS_SANITIZE STREQUAL "")
     message("Added: -fsanitize=${TBBSS_SANITIZE}")
