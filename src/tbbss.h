@@ -789,15 +789,40 @@ void copyBack(const TaskData<Value, Comp, ValueTraits> &task) {
 }
 
 template<class Value, class Comp, class ValueTraits>
-void processBase(const TaskData<Value, Comp, ValueTraits> &task) {
-    Span<Value> srcElems = task.shared_->elemsSpans_[task.world_].subspan(task.first_, task.len_);
-    smallSort<Value, Comp, ValueTraits>(srcElems, *task.shared_->comparator_);
+struct TaskRunner {
+    typedef TaskData<Value, Comp, ValueTraits> Data;
 
-    copyBack(task);
-}
+    Data data_;
+    bool guarded_;
+
+    void finalize() {
+        if (!guarded_)
+            return;
+        copyBack(data_);
+        guarded_ = false;
+    }
+    void disable() {
+        guarded_ = false;
+    }
+
+    ~TaskRunner() {
+        finalize();
+    }
+    TaskRunner(const Data &data)
+        : data_(data)
+        , guarded_(true)
+    {}
+
+    void operator() () const {
+        // TBB allows move-only tasks in task_group, but requires operator() to be const for no reason
+        // https://github.com/uxlfoundation/oneTBB/issues/393
+        processRecursive(*const_cast<TaskRunner*>(this));
+    }
+};
 
 template<class Value, class Comp, class ValueTraits>
-void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
+void processRecursive(TaskRunner<Value, Comp, ValueTraits> &taskRunner) {
+    TaskData<Value, Comp, ValueTraits> task = taskRunner.data_;
     SharedData<Value, Comp, ValueTraits> *shared = task.shared_;
 
     Span<Value> srcElems = shared->elemsSpans_[task.world_].subspan(task.first_, task.len_);
@@ -841,18 +866,16 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
         samplesTask.whome_ = task.world_;
         samplesTask.numWorkers_ = 1;
         TBBSS_STATS_ADD(shared->taskStats_, 1);
-        subTaskGroup.run_and_wait([samplesTask] {
-            processRecursive(samplesTask);
-        });
+        subTaskGroup.run_and_wait(TaskRunner<Value, Comp, ValueTraits>(samplesTask));
         propagateCancelProperly();
     }
-
-    MultiPivot<Value, ValueTraits> pivot;
-    pivot.initFromSortedSamples(srcElems.subspan(0, numSamples), numBuckets);
 
     size_t splitsStore[TBBSS_MAX_BUCKETS + 1];
     Span<size_t> splits(splitsStore, numBuckets + 1);
     TBBSS_ASSERT(splits.size() <= std::size(splitsStore));
+
+    MultiPivot<Value, ValueTraits> pivot;
+    pivot.initFromSortedSamples(srcElems.subspan(0, numSamples), numBuckets);
 
     multiPartition(
         srcElems, pivot, *shared->comparator_,
@@ -867,13 +890,12 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
     templateTask.whome_ = task.whome_;
     templateTask.numWorkers_ = uint32_t((task.numWorkers_ + numBuckets - 1) / numBuckets);
 
-    TaskData<Value, Comp, ValueTraits> subTasks[TBBSS_MAX_BUCKETS];
+    TaskRunner<Value, Comp, ValueTraits> subTaskRunners[TBBSS_MAX_BUCKETS];
     size_t subTaskCount = 0;
 
     for (size_t b = 0; b < numBuckets; b++) {
-        TaskData<Value, Comp, ValueTraits> &subTask = subTasks[subTaskCount];
-        subTask = templateTask;
-        
+        TaskData<Value, Comp, ValueTraits> subTask = templateTask;
+
         subTask.first_ = task.first_ + splits[b];
         subTask.len_ = splits[b + 1] - splits[b];
         if (subTask.len_ == 0)
@@ -890,18 +912,23 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
 
         if (subTask.len_ <= TBBSS_SMALLSORT_MAX) {
             TBBSS_STATS_ADD(shared->sizeStats_[log2up(subTask.len_)], 1);
-            processBase(subTask);
+            Span<Value> subElems = shared->elemsSpans_[subTask.world_].subspan(subTask.first_, subTask.len_);
+            smallSort<Value, Comp, ValueTraits>(subElems, *shared->comparator_);
+            copyBack(subTask);
             continue;
         }
 
-        subTaskCount++;
+        subTaskRunners[subTaskCount++] = TaskRunner<Value, Comp, ValueTraits>(subTask);
     }
+    // now that we have RAII guards installed in all the subtask runners,
+    // we drop the RAII guard in the parent task runner
+    // note: it is critically important that unwinding could not happen during generating these subtasks
+    // since partial & overlapping copyBacks won't work properly!
+    taskRunner.disable();
 
     for (size_t t = 0; t < subTaskCount; t++) {
         TBBSS_STATS_ADD(shared->taskStats_, 1);
-        task.taskGroup_->run([subTask = subTasks[t]] {
-            processRecursive(subTask);
-        });
+        task.taskGroup_->run(std::move(subTaskRunners[t]));
     }
 }
 
@@ -938,9 +965,7 @@ void sampleSort(Value *begin, size_t num, const Comp &comp = Comp()) {
     task.whome_ = 0;
 
     TBBSS_STATS_ADD(shared.taskStats_, 1);
-    rootTaskGroup.run_and_wait([&task] {
-        processRecursive(task);
-    });
+    rootTaskGroup.run_and_wait(TaskRunner<Value, Comp, ValueTraits>(task));
 
 #if TBBSS_COLLECT_STATS
     printf("TBB tasks: %d\n", shared.taskStats_.load());
