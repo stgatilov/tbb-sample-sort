@@ -860,14 +860,20 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
         task.numWorkers_, bucketOf
     );
 
-    TaskData<Value, Comp, ValueTraits> subTask = {};
-    subTask.shared_ = task.shared_;
-    subTask.taskGroup_ = task.taskGroup_;
-    subTask.world_ = task.world_ ^ 1;
-    subTask.whome_ = task.whome_;
-    subTask.numWorkers_ = uint32_t((task.numWorkers_ + numBuckets - 1) / numBuckets);
+    TaskData<Value, Comp, ValueTraits> templateTask = {};
+    templateTask.shared_ = task.shared_;
+    templateTask.taskGroup_ = task.taskGroup_;
+    templateTask.world_ = task.world_ ^ 1;
+    templateTask.whome_ = task.whome_;
+    templateTask.numWorkers_ = uint32_t((task.numWorkers_ + numBuckets - 1) / numBuckets);
+
+    TaskData<Value, Comp, ValueTraits> subTasks[TBBSS_MAX_BUCKETS];
+    size_t subTaskCount = 0;
 
     for (size_t b = 0; b < numBuckets; b++) {
+        TaskData<Value, Comp, ValueTraits> &subTask = subTasks[subTaskCount];
+        subTask = templateTask;
+        
         subTask.first_ = task.first_ + splits[b];
         subTask.len_ = splits[b + 1] - splits[b];
         if (subTask.len_ == 0)
@@ -888,8 +894,12 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
             continue;
         }
 
+        subTaskCount++;
+    }
+
+    for (size_t t = 0; t < subTaskCount; t++) {
         TBBSS_STATS_ADD(shared->taskStats_, 1);
-        task.taskGroup_->run([subTask] {
+        task.taskGroup_->run([subTask = subTasks[t]] {
             processRecursive(subTask);
         });
     }
