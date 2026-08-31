@@ -26,10 +26,12 @@ template<class T, class Lambda> std::vector<T> generateArray(size_t num, Lambda 
 
 #pragma pack(push, 1)
 template<class Key, size_t ValueBytes> struct IntegerElement {
+    typedef Key Key;
     Key key;
     char value[ValueBytes];
 };
 template<class Key> struct IntegerElement<Key, 0> {
+    typedef Key Key;
     Key key;
 };
 #pragma pack(pop)

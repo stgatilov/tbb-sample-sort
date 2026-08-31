@@ -27,7 +27,7 @@ TEST_CASE_TEMPLATE("Element", Element,
     std::uniform_int_distribution<int64_t> distr;
     std::vector<Element> arr = generateArray<Element>(DEFAULT_ARRAY_SIZE, [&]{
         Element x;
-        x.key = distr(random);
+        x.key = (Element::Key)distr(random);
         fillValue(x, random);
         return x;
     });
