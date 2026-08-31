@@ -2,7 +2,6 @@
 
 #include <stdio.h>
 #include <assert.h>
-#include <span>
 #include <chrono>
 #include <random>
 
