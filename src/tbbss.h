@@ -668,9 +668,9 @@ template<class Value, class Comp, class ValueTraits>
 struct TaskData {
     size_t first_ = 0;
     size_t len_ = 0;
-    size_t world_ = 0;
-    size_t whome_ = 0;
-    size_t numWorkers_ = 0;
+    uint16_t world_ = 0;
+    uint16_t whome_ = 0;
+    uint32_t numWorkers_ = 0;
 
     tbb::task_group *taskGroup_ = nullptr;
     SharedData<Value, Comp, ValueTraits> *shared_ = nullptr;
