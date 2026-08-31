@@ -11,10 +11,14 @@
 #include <algorithm>
 #include <type_traits>
 
+#pragma warning(push)
+// unreachable code is OK in templates, especially in DefaultValueTraits
+// turns out it happens inside TBB as well..
+#pragma warning(disable: 4702)
+
 #include <oneapi/tbb/parallel_for.h>
 #include <oneapi/tbb/task_group.h>
 #include <oneapi/tbb/task_arena.h>
-
 
 #define TBBSS_CLASSIFY_UNROLL 8
 #define TBBSS_SMALLSORT_MAX 32
@@ -864,3 +868,5 @@ void sampleSortIter(Value *begin, Value *end, const Comp &comp = Comp()) {
 }
 
 }
+
+#pragma warning(pop)
