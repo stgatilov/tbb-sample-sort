@@ -49,7 +49,7 @@ TEST_CASE("Comparator") {
 TEST_CASE("Equal1000") {
     typedef IntegerElement<int16_t, 2> Element;
     Random random;
-    std::uniform_int_distribution<int> distr(1000, 2000);
+    std::uniform_int_distribution<int16_t> distr(1000, 2000);
     std::vector<Element> arr = generateArray<Element>(DEFAULT_ARRAY_SIZE, [&]{
         Element x;
         x.key = distr(random);
@@ -66,7 +66,7 @@ TEST_CASE("Equal17") {
     std::uniform_int_distribution<int> distr(-42, -17);
     std::vector<Element> arr = generateArray<Element>(DEFAULT_ARRAY_SIZE, [&]{
         Element x;
-        x.key = distr(random);
+        x.key = char(distr(random));
         fillValue(x, random);
         return x;
     });
@@ -169,7 +169,7 @@ TEST_CASE("StdUniquePtr") {
 TEST_CASE("Determinism") {
     typedef IntegerElement<int16_t, 2> Element;
     Random random;
-    std::uniform_int_distribution<int> distr(1000, 2000);
+    std::uniform_int_distribution<int16_t> distr(1000, 2000);
     std::vector<Element> arr = generateArray<Element>(DEFAULT_ARRAY_SIZE, [&]{
         Element x;
         x.key = distr(random);
