@@ -92,21 +92,21 @@ struct Random {
     //   https://prng.di.unimi.it/xoroshiro128plusplus.c
 
     static TBBSS_FORCEINLINE int64_t rotl(const uint64_t x, int k) {
-    	return (x << k) | (x >> (64 - k));
+        return (x << k) | (x >> (64 - k));
     }
 
     uint64_t s[2];
 
     uint64_t TBBSS_FORCEINLINE next(void) {
-    	const uint64_t s0 = s[0];
-    	uint64_t s1 = s[1];
-    	const uint64_t result = rotl(s0 + s1, 17) + s0;
+        const uint64_t s0 = s[0];
+        uint64_t s1 = s[1];
+        const uint64_t result = rotl(s0 + s1, 17) + s0;
 
-    	s1 ^= s0;
-    	s[0] = rotl(s0, 49) ^ s1 ^ (s1 << 21); // a, b
-    	s[1] = rotl(s1, 28); // c
+        s1 ^= s0;
+        s[0] = rotl(s0, 49) ^ s1 ^ (s1 << 21); // a, b
+        s[1] = rotl(s1, 28); // c
 
-    	return result;
+        return result;
     }
 
     //==========================================
@@ -485,8 +485,8 @@ struct MultiPivot {
         Span<Value> tree(treeStore_[0].data(), numBuckets - 1);
         TBBSS_ASSERT(tree.size() <= std::size(treeStore_));
         size_t filled = 0;
-        for (int b = numBits - 1; b >= 0; b--) {
-            size_t len = (1 << b);
+        for (size_t b = numBits - 1; b >= 0; b--) {
+            size_t len = size_t(1) << b;
             for (size_t i = len - 1; i < numBuckets; i += len * 2)
                 ValueTraits::constructCopyOne(tree[filled++], sorted[i + 1]);
         }
@@ -563,14 +563,14 @@ void multiPartition(
             pivot.template classifyBlock<TBBSS_CLASSIFY_UNROLL>(&srcElems[i], bidx, comp);
             for (size_t q = 0; q < TBBSS_CLASSIFY_UNROLL; q++) {
                 size_t b = bidx[q];
-                bucketOf[i + q] = b;
+                bucketOf[i + q] = uint8_t(b);
                 localHisto[t * numBuckets + b]++;
             }
         }
 #endif        
         for (; i < r; i++) {
             size_t b = pivot.classifyOne(srcElems[i], comp);
-            bucketOf[i] = b;
+            bucketOf[i] = uint8_t(b);
             localHisto[t * numBuckets + b]++;
         }
     });
@@ -727,12 +727,12 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
     if (task.len_ <= (1 << 12)) {
         // one level: aim for 8-16 elements per bucket
         size_t logb = logn - 4;
-        numBuckets = 1 << logb;
+        numBuckets = size_t(1) << logb;
     }
     else {
         // two levels: aim for 8-16 elements per bucket
         size_t logb = (logn - 4) / 2;
-        numBuckets = 1 << logb;
+        numBuckets = size_t(1) << logb;
         numBuckets = std::min<size_t>(numBuckets, TBBSS_MAX_BUCKETS);
     }
     TBBSS_ASSERT(numBuckets >= 2 && numBuckets <= TBBSS_MAX_BUCKETS && isPot(numBuckets));
@@ -780,7 +780,7 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
     subTask.taskGroup_ = task.taskGroup_;
     subTask.world_ = task.world_ ^ 1;
     subTask.whome_ = task.whome_;
-    subTask.numWorkers_ = (task.numWorkers_ + numBuckets - 1) / numBuckets;
+    subTask.numWorkers_ = uint32_t((task.numWorkers_ + numBuckets - 1) / numBuckets);
 
     for (size_t b = 0; b < numBuckets; b++) {
         subTask.first_ = task.first_ + splits[b];
@@ -790,7 +790,7 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
 
         const Comp &comp = *shared->comparator_;
         if (b > 0 && b < numBuckets - 1 && !comp(pivot.sortedStore_[b].get(), pivot.sortedStore_[b + 1].get())) {
-            const Value &ref = pivot.sortedStore_[b].get();
+            [[maybe_unused]] const Value &ref = pivot.sortedStore_[b].get();
             for (size_t i = splits[b]; i < splits[b + 1]; i++)
                 TBBSS_ASSERT(!comp(dstElems[i], ref) && !comp(ref, dstElems[i]));
             copyBack(subTask);
