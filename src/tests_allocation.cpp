@@ -3,6 +3,14 @@
 #include <mutex>
 #include <atomic>
 
+#ifdef _MSC_VER
+    #define x_aligned_alloc(al, sz) _aligned_malloc((sz), (al))
+    #define x_aligned_free(ptr) _aligned_free(ptr)
+#else
+    #define x_aligned_alloc(al, sz) aligned_alloc((al), (sz))
+    #define x_aligned_free(ptr) free(ptr)
+#endif
+
 struct TrackedAllocation {
     std::align_val_t align = std::align_val_t(0);
     size_t size = 0;
@@ -22,14 +30,14 @@ size_t nextNewIndex;
 size_t failedNewIndex;
 
 void* operator new(size_t count, std::align_val_t al) {
-    void *ptr = aligned_alloc(size_t(al), count);
+    void *ptr = x_aligned_alloc(size_t(al), count);
 
     if (allocTracking.load()) {
         std::unique_lock lock(allocMutex);
 
         if (nextNewIndex++ == failedNewIndex) {
             // simulate failed allocation
-            free(ptr);
+            x_aligned_free(ptr);
             throw std::bad_alloc();
         }
 
@@ -47,6 +55,7 @@ void* operator new(size_t count, std::align_val_t al) {
         if (i == allocWatermark)
             allocWatermark++;
     }
+
     return ptr;
 }
 
@@ -67,7 +76,7 @@ void operator delete(void* ptr, std::size_t sz, std::align_val_t al) noexcept {
         trackedAllocs[i] = TrackedAllocation();
     }
 
-    return free(ptr);
+    x_aligned_free(ptr);
 }
 
 void checkAllocationsEmpty() {
