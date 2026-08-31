@@ -666,14 +666,13 @@ struct SharedData;
 
 template<class Value, class Comp, class ValueTraits>
 struct TaskData {
-    size_t first_ = 0;
-    size_t len_ = 0;
-    uint16_t world_ = 0;
-    uint16_t whome_ = 0;
-    uint32_t numWorkers_ = 0;
-
-    tbb::task_group *taskGroup_ = nullptr;
-    SharedData<Value, Comp, ValueTraits> *shared_ = nullptr;
+    size_t first_;
+    size_t len_;
+    uint16_t world_;
+    uint16_t whome_;
+    uint32_t numWorkers_;
+    tbb::task_group *taskGroup_;
+    SharedData<Value, Comp, ValueTraits> *shared_;
 };
 
 template<class Value, class Comp, class ValueTraits>
@@ -748,7 +747,7 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
     }
     else {
         tbb::task_group subTaskGroup;
-        TaskData<Value, Comp, ValueTraits> samplesTask;
+        TaskData<Value, Comp, ValueTraits> samplesTask = {};
         samplesTask.shared_ = shared;
         samplesTask.taskGroup_ = &subTaskGroup;
         samplesTask.first_ = task.first_;
@@ -776,7 +775,7 @@ void processRecursive(TaskData<Value, Comp, ValueTraits> task) {
         task.numWorkers_, bucketOf
     );
 
-    TaskData<Value, Comp, ValueTraits> subTask;
+    TaskData<Value, Comp, ValueTraits> subTask = {};
     subTask.shared_ = task.shared_;
     subTask.taskGroup_ = task.taskGroup_;
     subTask.world_ = task.world_ ^ 1;
@@ -834,7 +833,7 @@ void sampleSort(Value *begin, size_t num, const Comp &comp = Comp()) {
 
     tbb::task_group rootTaskGroup;
 
-    TaskData<Value, Comp, ValueTraits> task;
+    TaskData<Value, Comp, ValueTraits> task = {};
     task.shared_ = &shared;
     task.taskGroup_ = &rootTaskGroup;
     task.first_ = 0;
