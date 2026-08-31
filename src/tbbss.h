@@ -489,7 +489,7 @@ struct MultiPivot {
         Span<Value> tree(treeStore_[0].data(), numBuckets - 1);
         TBBSS_ASSERT(tree.size() <= std::size(treeStore_));
         size_t filled = 0;
-        for (size_t b = numBits - 1; b >= 0; b--) {
+        for (ptrdiff_t b = numBits - 1; b >= 0; b--) {
             size_t len = size_t(1) << b;
             for (size_t i = len - 1; i < numBuckets; i += len * 2)
                 ValueTraits::constructCopyOne(tree[filled++], sorted[i + 1]);
