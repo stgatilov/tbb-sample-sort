@@ -122,8 +122,9 @@ TEST_CASE("AllocFailsInteger") {
     });
 
     int numExceptions = 0;
+    std::vector<int> temp;
     for (int i = 0; i < 30; i++) {
-        std::vector<int> temp = arr;
+        temp = arr;
 
         checkAllocationsEmpty();
         failedNewIndex = i; // some allocation fails
@@ -145,9 +146,7 @@ TEST_CASE("AllocFailsInteger") {
     CHECK_GE(numExceptions, 10);
 }
 
-TEST_CASE("AllocFailsStdVector"
-    * doctest::skip()
-) {
+TEST_CASE("AllocFailsStdVector") {
     typedef std::vector<int> Element;
     Random random;
     std::uniform_int_distribution<int> distrLen(1, 3);
@@ -161,8 +160,9 @@ TEST_CASE("AllocFailsStdVector"
     });
 
     int numExceptions = 0;
+    std::vector<Element> temp;
     for (int i = 0; i < 30; i++) {
-        std::vector<Element> temp = arr;
+        temp = arr;
 
         checkAllocationsEmpty();
         failedNewIndex = i; // some allocation fails
@@ -171,9 +171,9 @@ TEST_CASE("AllocFailsStdVector"
         try {
             tbbss::sampleSort<
                 Element, std::less<Element>,
-                // element lifetime is properly handled on exception
-                // ONLY when "fork" mode is used!
-                tbbss::DefaultValueTraits<Element, tbbss::rtFork>
+                // any mode should work fine
+                // as long as any called element lifetime methods don't throw
+                tbbss::DefaultValueTraits<Element, tbbss::rtNone>
             >(temp.data(), temp.size());
         }
         catch(std::bad_alloc&) {
