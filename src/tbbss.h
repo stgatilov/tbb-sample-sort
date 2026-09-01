@@ -11,10 +11,12 @@
 #include <algorithm>
 #include <type_traits>
 
-#pragma warning(push)
-// unreachable code is OK in templates, especially in DefaultValueTraits
-// turns out it happens inside TBB as well..
-#pragma warning(disable: 4702)
+#ifdef _MSC_VER
+    #pragma warning(push)
+    // unreachable code is OK in templates, especially in DefaultValueTraits
+    // turns out it happens inside TBB as well..
+    #pragma warning(disable: 4702)
+#endif
 
 #include <oneapi/tbb/parallel_for.h>
 #include <oneapi/tbb/task_group.h>
@@ -948,4 +950,6 @@ void sampleSortIter(Value *begin, Value *end, const Comp &comp = Comp()) {
 
 }
 
-#pragma warning(pop)
+#ifdef _MSC_VER
+    #pragma warning(pop)
+#endif
