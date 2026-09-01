@@ -25,9 +25,10 @@ std::vector<Element> readBinFile(const char *filename) {
     FILE *f = fopen(filename, "rb");
     if (!f)
         std::terminate();
-    uint64_t num = 0;
-    if (fread(&num, sizeof(num), 1, f) != 1)
+    uint64_t num64 = 0;
+    if (fread(&num64, sizeof(num64), 1, f) != 1)
         std::terminate();
+    size_t num = size_t(num64);
     std::vector<Element> data(num);
     if (fread(data.data(), sizeof(data[0]), num, f) != num)
         std::terminate();
@@ -87,7 +88,7 @@ int main() {
     if (!badpos.empty()) {
         typedef unsigned long long uint64t;
         printf("FAILED: %zu of %zu\n", badpos.size(), input.size());
-        for (size_t i = 0; i < std::min(int(badpos.size()), 100); i++)
+        for (int i = 0; i < std::min(int(badpos.size()), 100); i++)
             printf("  [%zu .. %zu]: %llu > %llu\n", badpos[i], badpos[i] + 1, uint64t(input[badpos[i]].key), uint64t(input[badpos[i] + 1].key));
         std::terminate();
     }

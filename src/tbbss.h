@@ -513,7 +513,7 @@ struct MultiPivot {
         TBBSS_ASSERT(sorted.size() <= std::size(sortedStore_));
 
         for (size_t i = 1; i <= numBuckets - 1; i++) {
-            uint64_t pos = uint64_t(numSamples) * i / numBuckets;
+            size_t pos = uint64_t(numSamples) * i / numBuckets;
             ValueTraits::constructCopyOne(sorted[i], samples[pos]);
         }
         // note: we prepend one sentinel element for branchless handling of equality buckets
