@@ -20,17 +20,52 @@
 #include <oneapi/tbb/task_group.h>
 #include <oneapi/tbb/task_arena.h>
 
-#define TBBSS_CLASSIFY_UNROLL 8
-#define TBBSS_SMALLSORT_MAX 32
+// maximum number of buckets for multi-partition
 #define TBBSS_MAX_BUCKETS 256
-#define TBBSS_BRANCHLESS_COMPARESWAP 1
 
-#define TBBSS_UNCACHED_MININPUT_BYTES (1 << 20)
-#define TBBSS_UNCACHED_BUFFER_BYTES (1 << 10)
-//#define TBBSS_LARGE_PAGES (2 << 20)
+// when we have less elements, we sort them using trivial quadratic sort
+// note: this is tightly coupled to the strategy of selecting number of buckets in the code!
+#define TBBSS_SMALLSORT_MAX 32
 
-//#define TBBSS_DROP_ASSERTS 1
+// run multi-pivot classification on X elements at once for better ILP and less overhead
+// note: manually unrolled version exists only for X == 8,
+// other values may get slower if a compiler fails to unroll (MSVC does fail)
+#define TBBSS_CLASSIFY_UNROLL 8
+
+#ifndef TBBSS_BRANCHLESS_COMPARESWAP
+    // force branchless compare-and-swap via XOR and bitmasking in small sort?
+    // this is faster in practice, and compilers sometimes optimize away XOR and retain only CMOV
+    #define TBBSS_BRANCHLESS_COMPARESWAP 1
+#endif
+
+#ifndef TBBSS_UNCACHED_MININPUT_BYTES
+    // scattering many elements across buckets is performed using uncached writes (SSE instructions)
+    // in theory, it should reduce memory bandwidth, but in practice, I don't see measurably benefit
+    // note: set X == 0 to disable optimization
+
+    // uncached writes are enabled if total size of elements is more than X bytes
+    #define TBBSS_UNCACHED_MININPUT_BYTES (1 << 20)
+    // every bucket has an Y-byte buffer which accumulates outgoing elements before pushing them to RAM
+    #define TBBSS_UNCACHED_BUFFER_BYTES (1 << 10)
+#endif
+
+#ifndef TBBSS_LARGE_PAGES
+    // if X != 0, then large memory allocations are hinted for "transparent huge pages" with MADV_HUGEPAGE
+    // the allocations are also aligned to X bytes, so the only meaningful value is X = (2 << 20)
+    #define TBBSS_LARGE_PAGES 0
+    // note: this can radically accelerate freeing virtual memory pages at the end of the algorithm,
+    // which can otherwise can take 5-10% of wall time
+    // however, huge pages have many drawbacks, so I'm afraid this is not usable outside benchmarks
+#endif
+
+#ifndef TBBSS_DROP_ASSERTS
+    // X = 0: all internal asserts use standard C assert macro (stripped by NDEBUG)
+    // X = 1: all internal asserts are stripped from compilation
+    #define TBBSS_DROP_ASSERTS 0
+#endif
+
 //#define TBBSS_COLLECT_STATS 1
+
 
 #ifdef _MSC_VER
     #define TBBSS_FORCEINLINE __forceinline
@@ -647,7 +682,7 @@ void multiPartition(
     }
     
     bool scatterSimple = true;
-#ifdef TBBSS_UNCACHED_MININPUT_BYTES
+#if TBBSS_UNCACHED_MININPUT_BYTES
     if (numElems * sizeof(Value) > TBBSS_UNCACHED_MININPUT_BYTES) {
         scatterSimple = false;
         parallelWorkers(numWorkers, [numElems, numBuckets, numWorkers, srcElems, dstElems, localHisto, bucketOf](size_t t) {
