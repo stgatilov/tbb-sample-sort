@@ -536,6 +536,46 @@ struct MultiPivot {
             res[i] -= (res[i] > 0) & !comp(sorted[res[i]], value[i]);
         }
     }
+
+    // sadly, MSVC does not unroll blocks loops
+    // so we have to do it manually =(
+    template<class Comp>
+    TBBSS_FORCEINLINE void classifyBlock8(const Value *value, size_t *res, const Comp &comp) const {
+        Span<const Value> tree(treeStore_[0].data(), numBuckets_ - 1);
+        #define TBBSS_ITER(i) res[i] = 0
+        TBBSS_ITER(0);
+        TBBSS_ITER(1);
+        TBBSS_ITER(2);
+        TBBSS_ITER(3);
+        TBBSS_ITER(4);
+        TBBSS_ITER(5);
+        TBBSS_ITER(6);
+        TBBSS_ITER(7);
+        #undef TBBSS_ITER
+        for (size_t b = 0; b < numBits_; b++) {
+            #define TBBSS_ITER(i) res[i] = 2 * res[i] + 1 + size_t(!comp(value[i], tree[res[i]]));
+            TBBSS_ITER(0);
+            TBBSS_ITER(1);
+            TBBSS_ITER(2);
+            TBBSS_ITER(3);
+            TBBSS_ITER(4);
+            TBBSS_ITER(5);
+            TBBSS_ITER(6);
+            TBBSS_ITER(7);
+            #undef TBBSS_ITER
+        }
+        Span<const Value> sorted(sortedStore_[0].data(), numBuckets_);
+        #define TBBSS_ITER(i) res[i] -= (numBuckets_ - 1); res[i] -= (res[i] > 0) & !comp(sorted[res[i]], value[i]);
+        TBBSS_ITER(0);
+        TBBSS_ITER(1);
+        TBBSS_ITER(2);
+        TBBSS_ITER(3);
+        TBBSS_ITER(4);
+        TBBSS_ITER(5);
+        TBBSS_ITER(6);
+        TBBSS_ITER(7);
+        #undef TBBSS_ITER
+    }
 };
 
 template<class Value, class ValueTraits, class Comp>
@@ -564,7 +604,11 @@ void multiPartition(
 #ifdef TBBSS_CLASSIFY_UNROLL
         for (; i + TBBSS_CLASSIFY_UNROLL <= r; i += TBBSS_CLASSIFY_UNROLL) {
             size_t bidx[TBBSS_CLASSIFY_UNROLL];
+#if TBBSS_CLASSIFY_UNROLL == 8
+            pivot.classifyBlock8(&srcElems[i], bidx, comp);
+#else
             pivot.template classifyBlock<TBBSS_CLASSIFY_UNROLL>(&srcElems[i], bidx, comp);
+#endif
             for (size_t q = 0; q < TBBSS_CLASSIFY_UNROLL; q++) {
                 size_t b = bidx[q];
                 bucketOf[i + q] = uint8_t(b);
