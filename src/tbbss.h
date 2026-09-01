@@ -793,16 +793,15 @@ struct TaskRunner {
     typedef TaskData<Value, Comp, ValueTraits> Data;
 
     Data data_;
-    bool guarded_;
 
     void finalize() {
-        if (!guarded_)
+        if (!data_.shared_)
             return;
         copyBack(data_);
-        guarded_ = false;
+        data_.shared_ = nullptr;
     }
     void disable() {
-        guarded_ = false;
+        data_.shared_ = nullptr;
     }
 
     ~TaskRunner() {
@@ -810,8 +809,15 @@ struct TaskRunner {
     }
     TaskRunner(const Data &data)
         : data_(data)
-        , guarded_(true)
     {}
+
+    TaskRunner(TaskRunner &&src) {
+        data_ = src.data_;
+        src.disable();
+    }
+    TaskRunner& operator=(TaskRunner &&src) = delete;
+    TaskRunner(const TaskRunner&) = delete;
+    TaskRunner& operator=(const TaskRunner&) = delete;    
 
     void operator() () const {
         // TBB allows move-only tasks in task_group, but requires operator() to be const for no reason
@@ -890,8 +896,13 @@ void processRecursive(TaskRunner<Value, Comp, ValueTraits> &taskRunner) {
     templateTask.whome_ = task.whome_;
     templateTask.numWorkers_ = uint32_t((task.numWorkers_ + numBuckets - 1) / numBuckets);
 
-    TaskRunner<Value, Comp, ValueTraits> subTaskRunners[TBBSS_MAX_BUCKETS];
+    TaskData<Value, Comp, ValueTraits> subTasks[TBBSS_MAX_BUCKETS];
     size_t subTaskCount = 0;
+
+    // drop the RAII guard in the current task
+    // note: it is critically important that unwinding cannot not happen until
+    // all subtasks are either done or wrapped into TaskRunner-s!
+    taskRunner.disable();
 
     for (size_t b = 0; b < numBuckets; b++) {
         TaskData<Value, Comp, ValueTraits> subTask = templateTask;
@@ -918,17 +929,12 @@ void processRecursive(TaskRunner<Value, Comp, ValueTraits> &taskRunner) {
             continue;
         }
 
-        subTaskRunners[subTaskCount++] = TaskRunner<Value, Comp, ValueTraits>(subTask);
+        subTasks[subTaskCount++] = subTask;
     }
-    // now that we have RAII guards installed in all the subtask runners,
-    // we drop the RAII guard in the parent task runner
-    // note: it is critically important that unwinding could not happen during generating these subtasks
-    // since partial & overlapping copyBacks won't work properly!
-    taskRunner.disable();
 
     for (size_t t = 0; t < subTaskCount; t++) {
         TBBSS_STATS_ADD(shared->taskStats_, 1);
-        task.taskGroup_->run(std::move(subTaskRunners[t]));
+        task.taskGroup_->run(TaskRunner<Value, Comp, ValueTraits>(subTasks[t]));
     }
 }
 
