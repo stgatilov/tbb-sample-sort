@@ -49,6 +49,12 @@ jobs:
 
 
     steps:
+    - name: Install libc++
+      if: matrix.compiler == 'clang'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libc++-dev libc++abi-dev
+
     - uses: actions/checkout@v4
 
     - name: Setup conan package manager
