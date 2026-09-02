@@ -72,8 +72,8 @@ jobs:
       if: matrix.os == 'windows-latest'
       shell: cmd
       run: |
-        call build/Release/generators/conanrun.bat
-        build/Release/tbbss_tests.exe
+        call build\generators\conanrun.bat
+        build\Release\tbbss_tests.exe
 
     - name: Tests run (Posix)
       if: matrix.os != 'windows-latest'
