@@ -11,7 +11,9 @@
 #include <assert.h>
 #include <algorithm>
 
-#include <xmmintrin.h>
+#if TBBSS_UNCACHED_MININPUT_BYTES
+    #include <xmmintrin.h>
+#endif
 
 #if TBBSS_LARGE_PAGES
     #include <sys/mman.h>
@@ -28,6 +30,7 @@ void memcpyUncached(char *dst, const char *src, size_t size) {
     src += prefix;
     size -= prefix;
 
+#if TBBSS_UNCACHED_MININPUT_BYTES    
     while (size >= 64) {
         _mm_stream_si128((__m128i*)(dst + 0), _mm_loadu_si128((__m128i*)(src + 0)));
         _mm_stream_si128((__m128i*)(dst + 16), _mm_loadu_si128((__m128i*)(src + 16)));
@@ -37,6 +40,7 @@ void memcpyUncached(char *dst, const char *src, size_t size) {
         src += 64;
         size -= 64;
     }
+#endif    
 
     memcpy(dst, src, size);
 }
