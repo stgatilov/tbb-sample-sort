@@ -109,9 +109,10 @@ inline size_t log2up(size_t x) {
 //   https://github.com/uxlfoundation/oneTBB/issues/253
 // in order to make it thread-safe, we have to explicitly check for cancellation after every TBB wait
 // otherwise TBB can continue a task despite its invariant "waited-upon tasks are finished" is broken
+struct TbbCancelException : std::exception {};
 inline void propagateCancelProperly() {
     if (tbb::is_current_task_group_canceling())
-        throw 0;
+        throw TbbCancelException();
 }
 
 template<class Lambda> void parallelWorkers(size_t numWorkers, Lambda&& lambda) {
@@ -961,8 +962,14 @@ void sampleSort(Value *begin, size_t num, const Comp &comp = Comp()) {
     task.world_ = 0;
     task.whome_ = 0;
 
-    TBBSS_STATS_ADD(shared.taskStats_, 1);
-    rootTaskGroup.run_and_wait(TaskRunner<Value, Comp, ValueTraits>(task));
+    try {
+        TBBSS_STATS_ADD(shared.taskStats_, 1);
+        rootTaskGroup.run_and_wait(TaskRunner<Value, Comp, ValueTraits>(task));
+    }
+    catch (const TbbCancelException&) {
+        // this can happen if user canceled algorithm using non-throwing cancel
+        // e.g. started it inside tbb::task_group and called "cancel" on it
+    }
 
 #if TBBSS_COLLECT_STATS
     printf("TBB tasks: %d\n", shared.taskStats_.load());
