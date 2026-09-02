@@ -202,6 +202,9 @@ template<class T> TBBSS_FORCEINLINE void memcpyElement(void *dst, const void *sr
 #if 0
     memcpy(dst, src, sizeof(T));
 #else
+    // some people believe that memcpy of constant small size is compiled into optimal code
+    // this is not true unfortunately: neither on GCC nor on MSVC
+
     // note: unaligned access may happen here
     for (size_t i = 0; i < sizeof(T) / 8; i++)
         reinterpret_cast<uint64_t*>(dst)[i] = reinterpret_cast<const uint64_t*>(src)[i];
@@ -222,6 +225,9 @@ template<class T> TBBSS_FORCEINLINE void memcpyElement(void *dst, const void *sr
 }
 
 #if TBBSS_BRANCHLESS_COMPARESWAP
+// this compare-and-swap primitive is almost guaranteed to generate branchless code, even if not perfectly optimal
+// in practice, e.g. GCC optimizes away XOR and leaves two CMOV commands
+// smallSort works much faster on random inputs with branchless compare-and-swap
 template<class T> TBBSS_FORCEINLINE void memswapElementConditional(void *dst, void *src, bool doSwap) {
     int64_t mask = -int64_t(doSwap);
 
@@ -262,26 +268,34 @@ template<class T> TBBSS_FORCEINLINE void memswapElementConditional(void *dst, vo
 }
 #endif
 
-// "relocate" is Rust-style move
+// you can select one of three modes when you run sorting algorithm
+// BEWARE: the lifetime methods used must not throw exceptions!
+// in rtFork mode, lifetime methods are never used: the algorithm just memcpy-s bytes around
+//
+// note: "relocation" is Rust-style move
 // it moves an element into specified raw memory and makes source memory raw
 enum RelocationTrivialness {
     // relocation is done via destructing move: move construct + destroy old
-    // BEWARE: the lifetime methods used must not throw exceptions!
     // must be used for types that contain self-references
     // e.g. std::string with small string optimization
     rtNone = 0,
-    // relocation can be done by memcpy instead of destructing move
-    // is automatically used for trivially copyable types
+    // relocation is done with memcpy instead of destructing move
+    // this mode can obviously be used for trivially copyable types
     // but it can also be used for std::unique_ptr, std::vector, std::set etc.
     rtRelocate = 1,
-    // temporary copy of an element can be created using memcpy
+    // temporary copy of an element is created using memcpy too
     // such copies are used only to run comparator, and they are NOT destroyed
-    // is automatically used for trivially copyable types
+    // this mode is automatically used for trivially copyable types
     // but it can also be used for std::unique_ptr, std::vector, std::set etc.
     rtFork = 2,
 };
-template<class T> constexpr RelocationTrivialness IsTriviallyRelocatable = (std::is_trivially_copyable_v<T> ? rtFork : rtNone);
 
+// you can specialize this template to change the default mode globally by type
+template<class T> constexpr RelocationTrivialness IsTriviallyRelocatable = (std::is_trivially_copyable_v<T> ? rtFork : rtNone);
+// or you can pass non-default ValueTraits template argument into the algorithm
+// in this case you can set "IsRelocationTrivial" argument of DefaultValueTraits
+
+// note: the algorithm touches your elements only using these methods and by calling comparator!
 template<class T, RelocationTrivialness IsRelocationTrivial = IsTriviallyRelocatable<T>>
 struct DefaultValueTraits {
     static TBBSS_FORCEINLINE void relocateOne(T &dst, T &src) noexcept {
@@ -465,8 +479,14 @@ inline Span<const T> makeSpan(const Array<T, ValueTraits> &arr) { return {arr.da
 
 template<class Value, class Comp, class ValueTraits> void smallSort(Span<Value> arr, const Comp &comp) {
 #if 0
+    // (for testing only)
     std::sort(arr.data(), arr.data() + arr.size(), std::reference_wrapper(comp));
 #else
+    // this is a trivial bubble-like sort / insertion sort as a sorting network:
+    //   for i = [0..N) for j = [0..i) CompareAndSwap(A[i], A[j]);
+    // surprisingly, it works faster than standard insertion sort for me
+    // even with branchy compare-and-swap, it suffers just one extra misprediction per outer iteration
+    // it is trivial to verify and generates tiny code
     Raw<Value> buffer;
     for (size_t i = 1; i < arr.size(); i++) {
         Value &arrI = buffer.get();
@@ -542,9 +562,10 @@ struct MultiPivot {
     TBBSS_FORCEINLINE size_t classifyOne(const Value &value, const Comp &comp) const {
         size_t res = 0;
         Span<const Value> tree(treeStore_[0].data(), numBuckets_ - 1);
+        // find bucket for the element using prepared binary search tree
         for (size_t b = 0; b < numBits_; b++) {
             bool isLess = comp(value, tree[res]);
-            res = 2 * res + 1 + size_t(!isLess);
+            res = 2 * res + 1 + size_t(!isLess);    // branchless
         }
 
         Span<const Value> sorted(sortedStore_[0].data(), numBuckets_);
@@ -552,11 +573,17 @@ struct MultiPivot {
         TBBSS_ASSERT(res == numBuckets_ - 1 || comp(value, sorted[res + 1]));
         TBBSS_ASSERT(res == 0 || !comp(value, sorted[res]));
 
+        // for a bucket [L..R), redirect elements equal to L into the previous bucket
+        // whenever some pivot X is duplicated, all elements equal to X land into their own bucket
+        // this idea of equality buckets allows us to throw many equal elements out of recursion
+        // note: bitwise AND is intentional to make it branchless
         res -= (res > 0) & !comp(sorted[res], value);
         TBBSS_ASSERT(res < numBuckets_);
         return res;
     }
 
+    // classify fixed number of elements at once
+    // for less overhead and better ILP
     template<size_t N, class Comp>
     TBBSS_FORCEINLINE void classifyBlock(const Value *value, size_t *res, const Comp &comp) const {
         Span<const Value> tree(treeStore_[0].data(), numBuckets_ - 1);
@@ -575,7 +602,7 @@ struct MultiPivot {
         }
     }
 
-    // sadly, MSVC does not unroll blocks loops
+    // sadly, MSVC does not unroll the block loops 
     // so we have to do it manually =(
     template<class Comp>
     TBBSS_FORCEINLINE void classifyBlock8(const Value *value, size_t *res, const Comp &comp) const {
@@ -684,10 +711,13 @@ void multiPartition(
         TBBSS_ASSERT(tsum == globalHisto[b + 1]);
     }
     
-    bool scatterSimple = true;
+    bool distributeSimple = true;
 #if TBBSS_UNCACHED_MININPUT_BYTES
     if (numElems * sizeof(Value) > TBBSS_UNCACHED_MININPUT_BYTES) {
-        scatterSimple = false;
+        // when copying a lot of elements from the array to its mirrored copy,
+        // we normally pay 3x bandwidth: read source, write destination, and read destination
+        // using uncached writes allows to avoid reading destination cache lines unnecessarily
+        distributeSimple = false;
         parallelWorkers(numWorkers, [numElems, numBuckets, numWorkers, srcElems, dstElems, localHisto, bucketOf](size_t t) {
             size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
             size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
@@ -722,7 +752,7 @@ void multiPartition(
         });
     }
 #endif
-    if (scatterSimple) {
+    if (distributeSimple) {
         parallelWorkers(numWorkers, [numElems, numBuckets, numWorkers, srcElems, dstElems, localHisto, bucketOf](size_t t) {
             size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
             size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
@@ -789,6 +819,8 @@ void copyBack(const TaskData<Value, Comp, ValueTraits> &task) {
     ValueTraits::relocateMany(dstElems.data(), srcElems.data(), srcElems.size());
 }
 
+// this is RAII helper around copyBack
+// it ensures that elements are copied back into user array even if exception happens
 template<class Value, class Comp, class ValueTraits>
 struct TaskRunner {
     typedef TaskData<Value, Comp, ValueTraits> Data;
@@ -854,15 +886,20 @@ void processRecursive(TaskRunner<Value, Comp, ValueTraits> &taskRunner) {
     }
     TBBSS_ASSERT(numBuckets >= 2 && numBuckets <= TBBSS_MAX_BUCKETS && isPot(numBuckets));
 
+    // pivots are selected from samples, samples are selected randomly
+    // random is good enough, deterministic, but not cryptographically secure
     Random random;
     random.init(task.first_, task.len_, shared->randomSeed_);
     size_t numSamples = MultiPivot<Value, ValueTraits>::selectSamples(srcElems, numBuckets, random);
 
+    // samples are sorted using the same algorithm recursively
     if (numSamples <= TBBSS_SMALLSORT_MAX) {
         TBBSS_STATS_ADD(shared->sizeStats_[log2up(numSamples)], 1);
         smallSort<Value, Comp, ValueTraits>(srcElems.subspan(0, numSamples), *shared->comparator_);
     }
     else {
+        // but the algorithm is run in its own task group
+        // since we need to wait for its completion here
         tbb::task_group subTaskGroup;
         TaskData<Value, Comp, ValueTraits> samplesTask = {};
         samplesTask.shared_ = shared;
@@ -905,9 +942,12 @@ void processRecursive(TaskRunner<Value, Comp, ValueTraits> &taskRunner) {
     for (size_t b = 0; b < numBuckets; b++) {
         subTask.first_ = task.first_ + splits[b];
         subTask.len_ = splits[b + 1] - splits[b];
+
+        // empty bucket: nothing to do
         if (subTask.len_ == 0)
             continue;
 
+        // equality bucket: already sorted
         const Comp &comp = *shared->comparator_;
         if (b > 0 && b < numBuckets - 1 && !comp(pivot.sortedStore_[b].get(), pivot.sortedStore_[b + 1].get())) {
             [[maybe_unused]] const Value &ref = pivot.sortedStore_[b].get();
@@ -917,6 +957,7 @@ void processRecursive(TaskRunner<Value, Comp, ValueTraits> &taskRunner) {
             continue;
         }
 
+        // bucket too small: small-sort inline
         if (subTask.len_ <= TBBSS_SMALLSORT_MAX) {
             TBBSS_STATS_ADD(shared->sizeStats_[log2up(subTask.len_)], 1);
             Span<Value> subElems = shared->elemsSpans_[subTask.world_].subspan(subTask.first_, subTask.len_);
@@ -925,6 +966,7 @@ void processRecursive(TaskRunner<Value, Comp, ValueTraits> &taskRunner) {
             continue;
         }
 
+        // start subtask to sort this bucket recursively
         TBBSS_STATS_ADD(shared->taskStats_, 1);
         task.taskGroup_->run(TaskRunner<Value, Comp, ValueTraits>(subTask));
     }
@@ -978,13 +1020,15 @@ void sampleSort(Value *begin, size_t num, const Comp &comp = Comp()) {
 #endif        
 }
 
+// alternative interface for the lovers of iterators
+// note: sorting does not support actual iterators, only raw pointers
 template<
     class Value,
     class Comp = std::less<Value>,
     class ValueTraits = DefaultValueTraits<Value>
 >
 void sampleSortIter(Value *begin, Value *end, const Comp &comp = Comp()) {
-    return sampleSort(begin, end- begin, comp);
+    return sampleSort(begin, end - begin, comp);
 }
 
 }
