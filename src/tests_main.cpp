@@ -169,10 +169,9 @@ TEST_CASE("StdUniquePtr") {
 TEST_CASE("Determinism") {
     typedef IntegerElement<int16_t, 2> Element;
     Random random;
-    std::uniform_int_distribution<int16_t> distr(1000, 2000);
     std::vector<Element> arr = generateArray<Element>(DEFAULT_ARRAY_SIZE, [&]{
         Element x;
-        x.key = distr(random);
+        x.key = random() % 1000 + 1000;
         fillValue(x, random);
         return x;
     });
@@ -199,7 +198,7 @@ TEST_CASE("Determinism") {
         hash = (uint64_t(hash) * BASE + raw) % MOD;
     }
 
-    constexpr uint32_t PRERECORDED = 1655954255u;
+    constexpr uint32_t PRERECORDED = 1051995632u;
     CHECK_EQ(hash, PRERECORDED);
     //WARN_MESSAGE(false, "Determinism output hash: ", hash);
 }
