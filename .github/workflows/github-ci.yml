@@ -16,19 +16,18 @@ jobs:
         compiler: [gcc, clang, msvc]
 
         include:
-          # TODO: https://github.com/conan-io/conan/issues/18059
           - compiler: msvc
-            preset_name: conan-default
+            cmake_conf_preset: conan-default    # TODO: https://github.com/conan-io/conan/issues/18059
             c_compiler: cl
             cxx_compiler: cl
 
           - compiler: gcc
-            preset_name: conan-release
+            cmake_conf_preset: conan-release
             c_compiler: gcc
             cxx_compiler: g++
 
           - compiler: clang
-            preset_name: conan-release
+            cmake_conf_preset: conan-release
             c_compiler: clang
             cxx_compiler: clang++
 
@@ -64,10 +63,10 @@ jobs:
       run: conan install . --build=missing -pr:a .github/workflows/conan_base -pr:a .github/workflows/conan_${{matrix.compiler}}
 
     - name: CMake configure - generate build system files
-      run: cmake --preset=${{matrix.preset_name}}
+      run: cmake --preset=${{matrix.cmake_conf_preset}}
 
     - name: CMake build - build C/C++ code
-      run: cmake --build --preset=${{matrix.preset_name}}
+      run: cmake --build --preset=conan-release
 
     - name: Tests run
       run: build/Release/tbbss_tests
