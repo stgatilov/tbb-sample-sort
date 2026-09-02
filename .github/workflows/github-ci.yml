@@ -14,6 +14,15 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         compiler: [gcc, clang, msvc]
+
+        include:
+          # TODO: https://github.com/conan-io/conan/issues/18059
+          - compiler: msvc
+            preset_name: conan-default
+          - compiler: gcc
+            preset_name: conan-release
+          - compiler: clang
+            preset_name: conan-release
         exclude:
           - os: windows-latest
             compiler: gcc
@@ -35,7 +44,7 @@ jobs:
       run: cmake --preset=conan-release
 
     - name: CMake build - build C/C++ code
-      run: cmake --build --preset=conan-release
+      run: cmake --build --preset=${{matrix.preset_name}}
 
     - name: Tests run
       run: build/Release/tbbss_tests
