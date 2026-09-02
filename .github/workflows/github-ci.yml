@@ -15,7 +15,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         compiler: [gcc, clang, cl]
         include:
-          - os: windows-laters
+          - os: windows-latest
             conan_os: Windows
           - os: ubuntu-latest
             conan_os: Linux
@@ -36,13 +36,16 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Conan install
+    - name: Setup conan package manager
+      uses: conan-io/setup-conan@v1
+        
+    - name: Conan install - download and/or build libraries
       run: conan install . -s os=${{matrix.conan_os}} -s compiler=${{matrix.conan_compiler}} --build=missing
 
-    - name: CMake configure 
+    - name: CMake configure - generate build system files
       run: cmake --preset=conan-release
 
-    - name: CMake build
+    - name: CMake build - build C/C++ code
       run: cmake --build --preset=conan-release
 
     - name: Tests run
