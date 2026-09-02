@@ -2,6 +2,7 @@
 
 #include <mutex>
 #include <atomic>
+#include <thread>
 
 #ifdef _MSC_VER
     #define x_aligned_alloc(al, sz) _aligned_malloc((sz), (al))
@@ -187,4 +188,46 @@ TEST_CASE("AllocFailsStdVector") {
     }
 
     CHECK_GE(numExceptions, 10);
+}
+
+TEST_CASE("TbbCancelStdVector") {
+    typedef std::vector<int> Element;
+    Random random;
+    std::uniform_int_distribution<int> distrLen(1, 3);
+    std::uniform_int_distribution<int> distrElem(0, 1000);
+    std::vector<Element> arr = generateArray<Element>(10 << 20, [&]{
+        int l = distrLen(random);
+        Element res;
+        for (int i = 0; i < l; i++)
+            res.push_back(distrElem(random));
+        return res;
+    });
+
+    std::chrono::duration<double, std::milli> fullRunTime;
+    std::vector<Element> temp;
+    for (int i = 0; i < 30; i++) {
+        temp = arr;
+
+        auto Tbefore = std::chrono::steady_clock::now();
+
+        tbb::task_group taskGroup;
+        taskGroup.run([&] {
+            tbbss::sampleSort(temp.data(), temp.size());
+        });
+
+        if (i <= 1) {
+            taskGroup.wait();
+            auto Tafter = std::chrono::steady_clock::now();
+            fullRunTime = std::chrono::duration<double, std::milli>(Tafter - Tbefore);
+        }
+        else {
+            // we need to reproduce the case where TbbCancelException is thrown to unwind stack on cancellation
+            // it happens either at the beginning (parallel partition) or during samples sorting
+            // so we cancel at random times and hope that we catch the proper moment =(
+            double ratio = std::uniform_real_distribution<double>(0.0, 1.0)(random);
+            std::this_thread::sleep_for(fullRunTime * ratio);
+            taskGroup.cancel();
+            taskGroup.wait();
+        }
+    }
 }
