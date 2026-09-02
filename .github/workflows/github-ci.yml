@@ -27,11 +27,11 @@ jobs:
             conan_compiler: Visual Studio
         exclude:
           - os: windows-latest
-            c_compiler: gcc
+            compiler: gcc
           - os: windows-latest
-            c_compiler: clang
+            compiler: clang
           - os: ubuntu-latest
-            c_compiler: cl
+            compiler: cl
 
     steps:
     - uses: actions/checkout@v4
