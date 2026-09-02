@@ -6,6 +6,7 @@ fmt/12.2.0
 [generators]
 CMakeDeps
 CMakeToolchain
+VirtualRunEnv
 
 [layout]
 cmake_layout

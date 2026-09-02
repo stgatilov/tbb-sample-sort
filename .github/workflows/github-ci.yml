@@ -69,4 +69,13 @@ jobs:
       run: cmake --build --preset=conan-release
 
     - name: Tests run
-      run: build/Release/tbbss_tests
+      if: matrix.os == 'windows-latest'
+      run: |
+        call build/Release/generators/conanrun.bat
+        build/Release/tbbss_tests.exe
+
+    - name: Tests run
+      if: matrix.os != 'windows-latest'
+      run: |
+        source build/Release/generators/conanrun.sh
+        ./build/Release/tbbss_tests
