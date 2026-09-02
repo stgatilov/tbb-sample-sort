@@ -58,7 +58,7 @@ jobs:
       run: conan install . --build=missing -pr:a .github/workflows/conan_base -pr:a .github/workflows/conan_${{matrix.compiler}}
 
     - name: CMake configure - generate build system files
-      run: cmake --preset=conan-release
+      run: cmake --preset=${{matrix.preset_name}}
 
     - name: CMake build - build C/C++ code
       run: cmake --build --preset=${{matrix.preset_name}}
