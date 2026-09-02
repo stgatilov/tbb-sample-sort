@@ -29,7 +29,7 @@ jobs:
       uses: conan-io/setup-conan@v1
         
     - name: Conan install - download and/or build libraries
-      run: conan install . --build=missing -pr .github/workflows/conan_base -pr .github/workflows/conan_${{matrix.compiler}}
+      run: conan install . --build=missing -pr:a .github/workflows/conan_base -pr:a .github/workflows/conan_${{matrix.compiler}}
 
     - name: CMake configure - generate build system files
       run: cmake --preset=conan-release
