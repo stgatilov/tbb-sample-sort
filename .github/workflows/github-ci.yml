@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # deliver feedback for all matrix combinations
+      fail-fast: false
+
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        compiler: [gcc, clang, cl]
+        include:
+          - os: windows-laters
+            conan_os: Windows
+          - os: ubuntu-latest
+            conan_os: Linux
+          - compiler: gcc
+            conan_compiler: gcc
+          - compiler: clang
+            conan_compiler: clang
+          - compiler: cl
+            conan_compiler: Visual Studio
+        exclude:
+          - os: windows-latest
+            c_compiler: gcc
+          - os: windows-latest
+            c_compiler: clang
+          - os: ubuntu-latest
+            c_compiler: cl
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Conan install
+      run: conan install . -s os=${{matrix.conan_os}} -s compiler=${{matrix.conan_compiler}} --build=missing
+
+    - name: CMake configure 
+      run: cmake --preset=conan-release
+
+    - name: CMake build
+      run: cmake --build --preset=conan-release
+
+    - name: Tests run
+      working-directory: build/Release
+      run: tbbss_tests
