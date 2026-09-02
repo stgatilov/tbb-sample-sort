@@ -889,24 +889,19 @@ void processRecursive(TaskRunner<Value, Comp, ValueTraits> &taskRunner) {
         task.numWorkers_, bucketOf
     );
 
-    TaskData<Value, Comp, ValueTraits> templateTask = {};
-    templateTask.shared_ = task.shared_;
-    templateTask.taskGroup_ = task.taskGroup_;
-    templateTask.world_ = task.world_ ^ 1;
-    templateTask.whome_ = task.whome_;
-    templateTask.numWorkers_ = uint32_t((task.numWorkers_ + numBuckets - 1) / numBuckets);
-
-    TaskData<Value, Comp, ValueTraits> subTasks[TBBSS_MAX_BUCKETS];
-    size_t subTaskCount = 0;
-
     // drop the RAII guard in the current task
     // note: it is critically important that unwinding cannot not happen until
     // all subtasks are either done or wrapped into TaskRunner-s!
     taskRunner.disable();
 
-    for (size_t b = 0; b < numBuckets; b++) {
-        TaskData<Value, Comp, ValueTraits> subTask = templateTask;
+    TaskData<Value, Comp, ValueTraits> subTask = {};
+    subTask.shared_ = task.shared_;
+    subTask.taskGroup_ = task.taskGroup_;
+    subTask.world_ = task.world_ ^ 1;
+    subTask.whome_ = task.whome_;
+    subTask.numWorkers_ = uint32_t((task.numWorkers_ + numBuckets - 1) / numBuckets);
 
+    for (size_t b = 0; b < numBuckets; b++) {
         subTask.first_ = task.first_ + splits[b];
         subTask.len_ = splits[b + 1] - splits[b];
         if (subTask.len_ == 0)
@@ -929,12 +924,8 @@ void processRecursive(TaskRunner<Value, Comp, ValueTraits> &taskRunner) {
             continue;
         }
 
-        subTasks[subTaskCount++] = subTask;
-    }
-
-    for (size_t t = 0; t < subTaskCount; t++) {
         TBBSS_STATS_ADD(shared->taskStats_, 1);
-        task.taskGroup_->run(TaskRunner<Value, Comp, ValueTraits>(subTasks[t]));
+        task.taskGroup_->run(TaskRunner<Value, Comp, ValueTraits>(subTask));
     }
 }
 
