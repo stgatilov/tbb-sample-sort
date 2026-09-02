@@ -27,7 +27,7 @@ jobs:
             conan_compiler: clang
           - c_compiler: cl
             cxx_compiler: cl
-            conan_compiler: Visual Studio
+            conan_compiler: msvc
         exclude:
           - os: windows-latest
             c_compiler: gcc
@@ -47,7 +47,7 @@ jobs:
       uses: conan-io/setup-conan@v1
         
     - name: Conan install - download and/or build libraries
-      run: conan install . -s os=${{matrix.conan_os}} -s compiler="${{matrix.conan_compiler}}" --build=missing
+      run: conan install . -s os=${{matrix.conan_os}} -s compiler=${{matrix.conan_compiler}} --build=missing
 
     - name: CMake configure - generate build system files
       run: cmake --preset=conan-release
