@@ -139,7 +139,7 @@ TEST_CASE("StdVector") {
 
     tbbss::sampleSort<
         Element, std::less<Element>,
-        // note: std::vector is trivially relocatable and copyable
+        // note: std::vector is trivially relocatable and (normally) copyable
         // any RelocationTrivialness mode should work, although "fork" is preferred
         tbbss::DefaultValueTraits<Element, tbbss::rtRelocate>
     > (arr.data(), arr.size());
