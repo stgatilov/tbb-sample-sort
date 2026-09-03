@@ -315,3 +315,39 @@ TEST_CASE("Index64Bit"
     checkSorted(arr.data(), arr.size());
 }
 #endif
+
+constexpr size_t BENCHMARK_ARRAY_SIZE = 300 * 1000 * 1000;
+
+TEST_CASE("Benchmark") {
+    typedef int64_t Element;
+    Random random;
+    std::vector<Element> arr = generateArray<Element>(BENCHMARK_ARRAY_SIZE, [&]{
+        return random();
+    });
+
+    std::vector<Element> copy = arr;
+    auto Tbefore = std::chrono::steady_clock::now();
+    tbbss::sampleSort(arr.data(), arr.size());
+    auto Tafter = std::chrono::steady_clock::now();
+    double time0 = std::chrono::duration<double, std::milli>(Tafter - Tbefore).count();
+    checkSorted(arr.data(), arr.size());
+
+    arr = copy;
+    Tbefore = std::chrono::steady_clock::now();
+    tbbss::sampleSort(arr.data(), arr.size());
+    Tafter = std::chrono::steady_clock::now();
+    double time1 = std::chrono::duration<double, std::milli>(Tafter - Tbefore).count();
+    checkSorted(arr.data(), arr.size());
+
+    arr = copy;
+    Tbefore = std::chrono::steady_clock::now();
+    tbbss::sampleSort(arr.data(), arr.size());
+    Tafter = std::chrono::steady_clock::now();
+    double time2 = std::chrono::duration<double, std::milli>(Tafter - Tbefore).count();
+    checkSorted(arr.data(), arr.size());
+
+    printf("Sorting %zuM random 64-bit integers (ms): %0.0lf %0.0lf %0.0lf\n",
+        BENCHMARK_ARRAY_SIZE / 1000 / 1000,
+        time0, time1, time2
+    );
+}
