@@ -176,6 +176,23 @@ TEST_CASE("Determinism") {
         return x;
     });
 
+    auto computeHash = [](const std::vector<Element> &arr) {
+        static const uint32_t MOD = (1u << 31) - 1;
+        static const uint32_t BASE = 3;
+        uint32_t hash = 0;
+        for (const Element &x : arr) {
+            static_assert(sizeof(x) == 4);
+            uint32_t raw = *reinterpret_cast<const uint32_t*>(&x);
+            hash = (uint64_t(hash) * BASE + raw) % MOD;
+        }
+        return hash;
+    };
+
+    // make sure we generate input data deterministically across platforms
+    uint32_t inputHash = computeHash(arr);
+    constexpr uint32_t INPUT_PRERECORDED = 573506037u;
+    CHECK_EQ(inputHash, INPUT_PRERECORDED);
+
     // check that output is exactly the same on repeated runs of the function
     // (input contains many equal elements, otherwise sorted output is unique anyway)
     std::vector<Element> firstOutput;
@@ -189,18 +206,9 @@ TEST_CASE("Determinism") {
 
     // compare hash of the output against prerecorded hash
     // this ensures determinism across platforms as well
-    static const uint32_t MOD = (1u << 31) - 1;
-    static const uint32_t BASE = 3;
-    uint32_t hash = 0;
-    for (const Element &x : firstOutput) {
-        static_assert(sizeof(x) == 4);
-        uint32_t raw = *reinterpret_cast<const uint32_t*>(&x);
-        hash = (uint64_t(hash) * BASE + raw) % MOD;
-    }
-
-    constexpr uint32_t PRERECORDED = 1051995632u;
-    CHECK_EQ(hash, PRERECORDED);
-    //WARN_MESSAGE(false, "Determinism output hash: ", hash);
+    uint32_t outputHash = computeHash(firstOutput);
+    constexpr uint32_t OUTPUT_PRERECORDED = 1051995632u;
+    CHECK_EQ(outputHash, OUTPUT_PRERECORDED);
 }
 
 TEST_CASE("ParallelSorts") {
