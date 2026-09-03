@@ -79,4 +79,4 @@ jobs:
       if: matrix.os != 'windows-latest'
       run: |
         source build/Release/generators/conanrun.sh
-        ./build/Release/tbbss_tests
+        ./build/Release/tbbss_tests -d
