@@ -72,9 +72,11 @@
 #ifdef _MSC_VER
     #define TBBSS_FORCEINLINE __forceinline
     #define TBBSS_NOINLINE __declspec(noinline)
+    #define TBBSS_MAYALIAS
 #else
     #define TBBSS_FORCEINLINE __attribute__((always_inline)) inline
     #define TBBSS_NOINLINE __attribute__((noinline))
+    #define TBBSS_MAYALIAS __attribute__((may_alias))
 #endif
 
 #if TBBSS_DROP_ASSERTS
@@ -219,21 +221,27 @@ template<class T> TBBSS_FORCEINLINE void memcpyElement(void *dst, const void *sr
     // some people believe that memcpy of constant small size is compiled into optimal code
     // this is not true unfortunately: neither on GCC nor on MSVC
 
+    // without this hack, the algorithm breaks on Clang under strict aliasing rules
+    typedef TBBSS_MAYALIAS uint64_t ma_uint64;
+    typedef TBBSS_MAYALIAS uint32_t ma_uint32;
+    typedef TBBSS_MAYALIAS uint16_t ma_uint16;
+    typedef TBBSS_MAYALIAS uint8_t ma_uint8;
+
     // note: unaligned access may happen here
     for (size_t i = 0; i < sizeof(T) / 8; i++)
-        reinterpret_cast<uint64_t*>(dst)[i] = reinterpret_cast<const uint64_t*>(src)[i];
+        reinterpret_cast<ma_uint64*>(dst)[i] = reinterpret_cast<const ma_uint64*>(src)[i];
 
     if constexpr (sizeof(T) % 8 >= 4) {
         static constexpr size_t Index = 2 * (sizeof(T) / 8);
-        reinterpret_cast<uint32_t*>(dst)[Index] = reinterpret_cast<const uint32_t*>(src)[Index];
+        reinterpret_cast<ma_uint32*>(dst)[Index] = reinterpret_cast<const ma_uint32*>(src)[Index];
     }
     if constexpr (sizeof(T) % 4 >= 2) {
         static constexpr size_t Index = 2 * (sizeof(T) / 4);
-        reinterpret_cast<uint16_t*>(dst)[Index] = reinterpret_cast<const uint16_t*>(src)[Index];
+        reinterpret_cast<ma_uint16*>(dst)[Index] = reinterpret_cast<const ma_uint16*>(src)[Index];
     }
     if constexpr (sizeof(T) % 2 >= 1) {
         static constexpr size_t Index = 2 * (sizeof(T) / 2);
-        reinterpret_cast<uint8_t*>(dst)[Index] = reinterpret_cast<const uint8_t*>(src)[Index];
+        reinterpret_cast<ma_uint8*>(dst)[Index] = reinterpret_cast<const ma_uint8*>(src)[Index];
     }
 #endif
 }
@@ -245,10 +253,15 @@ template<class T> TBBSS_FORCEINLINE void memcpyElement(void *dst, const void *sr
 template<class T> TBBSS_FORCEINLINE void memswapElementConditional(void *dst, void *src, bool doSwap) {
     int64_t mask = -int64_t(doSwap);
 
+    typedef TBBSS_MAYALIAS uint64_t ma_uint64;
+    typedef TBBSS_MAYALIAS uint32_t ma_uint32;
+    typedef TBBSS_MAYALIAS uint16_t ma_uint16;
+    typedef TBBSS_MAYALIAS uint8_t ma_uint8;
+
     // note: unaligned access may happen here
     for (size_t i = 0; i < sizeof(T) / 8; i++) {
-        uint64_t &a = reinterpret_cast<uint64_t*>(dst)[i];
-        uint64_t &b = reinterpret_cast<uint64_t*>(src)[i];
+        ma_uint64 &a = reinterpret_cast<ma_uint64*>(dst)[i];
+        ma_uint64 &b = reinterpret_cast<ma_uint64*>(src)[i];
         uint64_t delta = (a ^ b) & uint64_t(mask);
         a ^= delta;
         b ^= delta;
@@ -256,16 +269,16 @@ template<class T> TBBSS_FORCEINLINE void memswapElementConditional(void *dst, vo
 
     if constexpr (sizeof(T) % 8 >= 4) {
         static constexpr size_t Index = 2 * (sizeof(T) / 8);
-        uint32_t &a = reinterpret_cast<uint32_t*>(dst)[Index];
-        uint32_t &b = reinterpret_cast<uint32_t*>(src)[Index];
+        ma_uint32 &a = reinterpret_cast<ma_uint32*>(dst)[Index];
+        ma_uint32 &b = reinterpret_cast<ma_uint32*>(src)[Index];
         uint32_t delta = (a ^ b) & uint32_t(mask);
         a ^= delta;
         b ^= delta;
     }
     if constexpr (sizeof(T) % 4 >= 2) {
         static constexpr size_t Index = 2 * (sizeof(T) / 4);
-        uint16_t &a = reinterpret_cast<uint16_t*>(dst)[Index];
-        uint16_t &b = reinterpret_cast<uint16_t*>(src)[Index];
+        ma_uint16 &a = reinterpret_cast<ma_uint16*>(dst)[Index];
+        ma_uint16 &b = reinterpret_cast<ma_uint16*>(src)[Index];
         uint16_t delta = (a ^ b) & uint16_t(mask);
         a ^= delta;
         b ^= delta;
@@ -273,8 +286,8 @@ template<class T> TBBSS_FORCEINLINE void memswapElementConditional(void *dst, vo
     }
     if constexpr (sizeof(T) % 2 >= 1) {
         static constexpr size_t Index = 2 * (sizeof(T) / 2);
-        uint8_t &a = reinterpret_cast<uint8_t*>(dst)[Index];
-        uint8_t &b = reinterpret_cast<uint8_t*>(src)[Index];
+        ma_uint8 &a = reinterpret_cast<ma_uint8*>(dst)[Index];
+        ma_uint8 &b = reinterpret_cast<ma_uint8*>(src)[Index];
         uint8_t delta = (a ^ b) & uint8_t(mask);
         a ^= delta;
         b ^= delta;
