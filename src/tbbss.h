@@ -186,10 +186,24 @@ template<class T> struct Allocator {
 template<class T> struct Raw {
     alignas(T) char bytes_[sizeof(T)];
 
-    TBBSS_FORCEINLINE T *data() { return reinterpret_cast<T *>(bytes_); }
-    TBBSS_FORCEINLINE const T *data() const { return reinterpret_cast<const T *>(bytes_); }
-    TBBSS_FORCEINLINE T &get() { return *reinterpret_cast<T *>(bytes_); }
-    TBBSS_FORCEINLINE const T &get() const { return *reinterpret_cast<const T *>(bytes_); }
+    // "StdVector" fails on Clang with T = std::vector
+    // it works if any of this is used:
+    //   * rtNone mode
+    //   * -fno-strict-vtable-pointers
+    //   * C++20 and std::launder here
+    // so let's use launder, it is noop anyway
+    TBBSS_FORCEINLINE T *data() {
+        return std::launder(reinterpret_cast<T *>(bytes_));
+    }
+    TBBSS_FORCEINLINE const T *data() const {
+        return std::launder(reinterpret_cast<const T *>(bytes_));
+    }
+    TBBSS_FORCEINLINE T &get() {
+        return *std::launder(reinterpret_cast<T *>(bytes_));
+    }
+    TBBSS_FORCEINLINE const T &get() const {
+        return *std::launder(reinterpret_cast<const T *>(bytes_));
+    }
 };
 template<class T> constexpr inline bool IsRaw = false;
 template<class T> constexpr inline bool IsRaw<Raw<T>> = true;
@@ -271,6 +285,7 @@ template<class T> TBBSS_FORCEINLINE void memswapElementConditional(void *dst, vo
 // you can select one of three modes when you run sorting algorithm
 // BEWARE: the lifetime methods used must not throw exceptions!
 // in rtFork mode, lifetime methods are never used: the algorithm just memcpy-s bytes around
+// rtNone mode is also "the least undefined behavior" out of the three...
 //
 // note: "relocation" is Rust-style move
 // it moves an element into specified raw memory and makes source memory raw
