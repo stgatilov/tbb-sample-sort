@@ -316,7 +316,7 @@ TEST_CASE("Index64Bit"
 }
 #endif
 
-constexpr size_t BENCHMARK_ARRAY_SIZE = 300 * 1000 * 1000;
+constexpr size_t BENCHMARK_ARRAY_SIZE = 200 * 1000 * 1000;
 
 TEST_CASE("Benchmark") {
     typedef int64_t Element;
