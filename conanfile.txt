@@ -1,7 +1,6 @@
 [requires]
 onetbb/2023.1.0
 doctest/2.5.2
-fmt/12.2.0
 
 [generators]
 CMakeDeps

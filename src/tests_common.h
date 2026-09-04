@@ -3,12 +3,11 @@
 #include <doctest/doctest.h>
 #include <tbbss.h>
 
+#include <stdio.h>
 #include <vector>
 #include <string>
 #include <memory>
 #include <random>
-
-#include <fmt/format.h>
 
 //----------------------------------------------------------------------------------------------
 
@@ -88,7 +87,9 @@ template<class T, class Comparator = std::less<T>> void checkSorted(T *begin, si
         if (comp(begin[i], begin[i - 1]))
             badpos.push_back(i - 1);
 
-    CHECK_MESSAGE(badpos.empty(), fmt::format("{:d}/{:d} bad positions; first one at {:d}", badpos.size(), n, badpos.front()));
+    char message[256];
+    sprintf(message, "%zu/%zu bad positions; first one at %zu", badpos.size(), n, (badpos.empty() ? 0 : badpos.front()));
+    CHECK_MESSAGE(badpos.empty(), message);
 }
 
 template<class T, class Comparator = std::less<T>> void checkUnsorted(T *begin, size_t n, const Comparator &comp = Comparator()) {
@@ -106,7 +107,9 @@ template<class T> void checkExactlyEqual(T *begin1, T *begin2, size_t n) {
         if (totalCompare(begin1[i], begin2[i]) != 0)
             badpos.push_back(i);
 
-    CHECK_MESSAGE(badpos.empty(), fmt::format("{:d}/{:d} bad positions; first one at {:d}", badpos.size(), n, badpos.front()));
+    char message[256];
+    sprintf(message, "%zu/%zu bad positions; first one at %zu", badpos.size(), n, (badpos.empty() ? 0 : badpos.front()));
+    CHECK_MESSAGE(badpos.empty(), message);
 }
 
 template<class T> void runAndValidateSampleSort(std::vector<T> &arr) {

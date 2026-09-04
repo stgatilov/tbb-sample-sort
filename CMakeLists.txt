@@ -58,7 +58,6 @@ endif()
 
 if (TBBSS_BUILD_TESTS)
     find_package(doctest REQUIRED)
-    find_package(fmt REQUIRED)
     add_executable(tbbss_tests
         src/tests_common.h
         src/tests_main.cpp
@@ -66,7 +65,7 @@ if (TBBSS_BUILD_TESTS)
         src/tests_allocation.cpp
         src/tests_framework.cpp
     )
-    target_link_libraries(tbbss_tests PRIVATE tbbsamplesort doctest::doctest fmt::fmt)
+    target_link_libraries(tbbss_tests PRIVATE tbbsamplesort doctest::doctest)
     target_compile_definitions(tbbss_tests PRIVATE
         DOCTEST_CONFIG_NO_TRY_CATCH_IN_ASSERTS
     )
