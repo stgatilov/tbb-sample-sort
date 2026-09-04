@@ -115,6 +115,14 @@ TEST_CASE("AllocPrecheck") {
     checkSorted(arr.data(), arr.size());
 }
 
+#if TBBSS_UNCACHED_MININPUT_BYTES
+    #define MIN_ALLOCATION_FAILS 10
+#else
+    // without uncached writes, we allocate too few memory buffers
+    // I get only 3 allocation on the tests (elems copy, bucket indexes, local histo on first partition)
+    #define MIN_ALLOCATION_FAILS 3
+#endif
+
 TEST_CASE("AllocFailsInteger") {
     Random random;
     std::uniform_int_distribution<int> distr;
@@ -144,7 +152,7 @@ TEST_CASE("AllocFailsInteger") {
         checkAllocationsEmpty();
     }
 
-    CHECK_GE(numExceptions, 10);
+    CHECK_GE(numExceptions, MIN_ALLOCATION_FAILS);
 }
 
 TEST_CASE("AllocFailsStdVector") {
@@ -187,7 +195,7 @@ TEST_CASE("AllocFailsStdVector") {
         checkAllocationsEmpty();
     }
 
-    CHECK_GE(numExceptions, 10);
+    CHECK_GE(numExceptions, MIN_ALLOCATION_FAILS);
 }
 
 TEST_CASE("TbbCancelStdVector") {
