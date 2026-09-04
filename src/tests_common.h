@@ -88,7 +88,7 @@ template<class T, class Comparator = std::less<T>> void checkSorted(T *begin, si
             badpos.push_back(i - 1);
 
     char message[256];
-    sprintf(message, "%zu/%zu bad positions; first one at %zu", badpos.size(), n, (badpos.empty() ? 0 : badpos.front()));
+    snprintf(message, sizeof(message), "%zu/%zu bad positions; first one at %zu", badpos.size(), n, (badpos.empty() ? 0 : badpos.front()));
     CHECK_MESSAGE(badpos.empty(), message);
 }
 
@@ -108,7 +108,7 @@ template<class T> void checkExactlyEqual(T *begin1, T *begin2, size_t n) {
             badpos.push_back(i);
 
     char message[256];
-    sprintf(message, "%zu/%zu bad positions; first one at %zu", badpos.size(), n, (badpos.empty() ? 0 : badpos.front()));
+    snprintf(message, sizeof(message), "%zu/%zu bad positions; first one at %zu", badpos.size(), n, (badpos.empty() ? 0 : badpos.front()));
     CHECK_MESSAGE(badpos.empty(), message);
 }
 
