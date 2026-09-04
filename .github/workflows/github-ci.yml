@@ -48,6 +48,9 @@ jobs:
           - os: macos-latest
             compiler: gcc
 
+          - compiler: msvc
+            sanitize: address
+
 
     env:
       CC: ${{matrix.c_compiler}}
