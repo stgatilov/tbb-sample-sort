@@ -18,7 +18,6 @@
     #pragma warning(disable: 4702)
 #endif
 
-#include <oneapi/tbb/parallel_for.h>
 #include <oneapi/tbb/task_group.h>
 #include <oneapi/tbb/task_arena.h>
 
@@ -117,14 +116,20 @@ inline void propagateCancelProperly() {
         throw TbbCancelException();
 }
 
-template<class Lambda> void parallelWorkers(size_t numWorkers, Lambda&& lambda) {
+template<class Lambda> void parallelWorkers(size_t numWorkers, const Lambda& lambda) {
     TBBSS_ASSERT(numWorkers > 0);
     if (numWorkers == 1) {
         lambda(0);
     }
     else {
-        tbb::parallel_for<size_t>(0, numWorkers, lambda);
-        propagateCancelProperly();
+        tbb::task_group_context uncancellable(tbb::task_group_context::isolated);
+        tbb::task_group taskGroup(uncancellable);
+        for (size_t t = 0; t < numWorkers; t++) {
+            if (t < numWorkers - 1)
+                taskGroup.run([t, lambda]{ lambda(t); });
+            else
+                taskGroup.run_and_wait([t, lambda]{ lambda(t); });
+        }
     }
 }
 
