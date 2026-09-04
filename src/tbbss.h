@@ -742,7 +742,12 @@ void multiPartition(
         Array<Raw<Value>, DefaultValueTraits<Raw<Value>>> buffers;
         buffers.clearResize(numWorkers * TBBSS_MAX_BUCKETS * Lane);
 
-        parallelWorkers(numWorkers, [numElems, numBuckets, numWorkers, srcElems, dstElems, localHisto, bucketOf, &buffers](size_t t) {
+        parallelWorkers(numWorkers, [
+            numElems, numBuckets, numWorkers, 
+            srcElems, dstElems,
+            localHisto, bucketOf,
+            &buffers, Lane
+        ](size_t t) {
             size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
             size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
 
