@@ -14,6 +14,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         compiler: [gcc, clang, msvc]
+        sanitize: ["", address]
 
         include:
           - compiler: msvc
@@ -63,7 +64,7 @@ jobs:
       run: conan install . --build=missing -pr:a .github/workflows/conan_base -pr:a .github/workflows/conan_${{matrix.compiler}}
 
     - name: CMake configure - generate build system files
-      run: cmake --preset=${{matrix.cmake_conf_preset}}
+      run: cmake --preset=${{matrix.cmake_conf_preset}} -DTBBSS_SANITIZE=${{matrix.sanitize}}
 
     - name: CMake build - build C/C++ code
       run: cmake --build --preset=conan-release
