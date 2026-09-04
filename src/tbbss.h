@@ -67,6 +67,14 @@
 
 //#define TBBSS_COLLECT_STATS 1
 
+// unsupported combinations
+#if TBBSS_LARGE_PAGES && defined(_MSC_VER)
+    #undef TBBSS_LARGE_PAGES
+#endif
+#if TBBSS_UNCACHED_MININPUT_BYTES && !(defined(__x86_64__) || defined(_M_X64) || defined(i386) || defined(__i386__) || defined(__i386) || defined(_M_IX86))
+    #undef TBBSS_UNCACHED_MININPUT_BYTES
+    #undef TBBSS_UNCACHED_BUFFER_BYTES
+#endif
 
 #ifdef _MSC_VER
     #define TBBSS_FORCEINLINE __forceinline
