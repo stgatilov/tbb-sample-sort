@@ -745,16 +745,16 @@ void multiPartition(
         // using uncached writes allows to avoid reading destination cache lines unnecessarily
         distributeSimple = false;
 
-        constexpr size_t Lane = TBBSS_UNCACHED_BUFFER_BYTES / sizeof(Value);
-        static_assert(Lane > 0);
+        constexpr size_t Llane = TBBSS_UNCACHED_BUFFER_BYTES / sizeof(Value);
+        static_assert(Llane > 0);
         Array<Raw<Value>, DefaultValueTraits<Raw<Value>>> buffers;
-        buffers.clearResize(numWorkers * TBBSS_MAX_BUCKETS * Lane);
+        buffers.clearResize(numWorkers * TBBSS_MAX_BUCKETS * Llane);
 
         parallelWorkers(numWorkers, [
             numElems, numBuckets, numWorkers, 
             srcElems, dstElems,
             localHisto, bucketOf,
-            &buffers, Lane
+            &buffers
         ](size_t t) {
             size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
             size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
@@ -763,6 +763,7 @@ void multiPartition(
             for (size_t b = 0; b < numBuckets; b++)
                 bufCnt[b] = 0;
 
+            constexpr size_t Lane = TBBSS_UNCACHED_BUFFER_BYTES / sizeof(Value);
             Span<Raw<Value>> buffer = makeSpan(buffers).subspan(t * TBBSS_MAX_BUCKETS * Lane, TBBSS_MAX_BUCKETS * Lane);
 
             for (size_t i = l; i < r; i++) {
