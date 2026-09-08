@@ -532,6 +532,7 @@ template<class Value, class ValueTraits>
 struct MultiPivot {
     size_t numBits_ = 0;
     size_t numBuckets_ = 0;
+    bool hasEqualBuckets_ = false;
     Raw<Value> sortedStore_[TBBSS_MAX_BUCKETS];
     Raw<Value> treeStore_[TBBSS_MAX_BUCKETS];
 
@@ -555,7 +556,8 @@ struct MultiPivot {
         return numSamples;
     }
 
-    void initFromSortedSamples(Span<Value> samples, size_t numBuckets) {
+    template<class Comp>
+    void initFromSortedSamples(Span<Value> samples, size_t numBuckets, const Comp &comp) {
         size_t numSamples = samples.size();
 
         Span<Value> sorted(sortedStore_[0].data(), numBuckets);
@@ -567,6 +569,10 @@ struct MultiPivot {
         }
         // note: we prepend one sentinel element for branchless handling of equality buckets
         ValueTraits::constructCopyOne(sorted[0], sorted[1]);
+
+        hasEqualBuckets_ = false;
+        for (size_t i = 2; i <= numBuckets - 1; i++)
+            hasEqualBuckets_ |= !comp(sorted[i - 1], sorted[i]);
 
         size_t numBits = log2up(numBuckets);
 
@@ -599,11 +605,13 @@ struct MultiPivot {
         TBBSS_ASSERT(res == numBuckets_ - 1 || comp(value, sorted[res + 1]));
         TBBSS_ASSERT(res == 0 || !comp(value, sorted[res]));
 
-        // for a bucket [L..R), redirect elements equal to L into the previous bucket
-        // whenever some pivot X is duplicated, all elements equal to X land into their own bucket
-        // this idea of equality buckets allows us to throw many equal elements out of recursion
-        // note: bitwise AND is intentional to make it branchless
-        res -= (res > 0) & !comp(sorted[res], value);
+        if (hasEqualBuckets_) {
+            // for a bucket [L..R), redirect elements equal to L into the previous bucket
+            // whenever some pivot X is duplicated, all elements equal to X land into their own bucket
+            // this idea of equality buckets allows us to throw many equal elements out of recursion
+            // note: bitwise AND is intentional to make it branchless
+            res -= (res > 0) & !comp(sorted[res], value);
+        }
         TBBSS_ASSERT(res < numBuckets_);
         return res;
     }
@@ -621,10 +629,12 @@ struct MultiPivot {
                 res[i] = 2 * res[i] + 1 + size_t(!isLess);
             }
         }
-        Span<const Value> sorted(sortedStore_[0].data(), numBuckets_);
-        for (size_t i = 0; i < N; i++) {
+        for (size_t i = 0; i < N; i++)
             res[i] -= (numBuckets_ - 1);
-            res[i] -= (res[i] > 0) & !comp(sorted[res[i]], value[i]);
+        if (hasEqualBuckets_) {
+            Span<const Value> sorted(sortedStore_[0].data(), numBuckets_);
+            for (size_t i = 0; i < N; i++)
+                res[i] -= (res[i] > 0) & !comp(sorted[res[i]], value[i]);
         }
     }
 
@@ -655,8 +665,7 @@ struct MultiPivot {
             TBBSS_ITER(7);
             #undef TBBSS_ITER
         }
-        Span<const Value> sorted(sortedStore_[0].data(), numBuckets_);
-        #define TBBSS_ITER(i) res[i] -= (numBuckets_ - 1); res[i] -= (res[i] > 0) & !comp(sorted[res[i]], value[i]);
+        #define TBBSS_ITER(i) res[i] -= (numBuckets_ - 1);
         TBBSS_ITER(0);
         TBBSS_ITER(1);
         TBBSS_ITER(2);
@@ -666,6 +675,19 @@ struct MultiPivot {
         TBBSS_ITER(6);
         TBBSS_ITER(7);
         #undef TBBSS_ITER
+        if (hasEqualBuckets_) {
+            Span<const Value> sorted(sortedStore_[0].data(), numBuckets_);
+            #define TBBSS_ITER(i) res[i] -= (res[i] > 0) & !comp(sorted[res[i]], value[i]);
+            TBBSS_ITER(0);
+            TBBSS_ITER(1);
+            TBBSS_ITER(2);
+            TBBSS_ITER(3);
+            TBBSS_ITER(4);
+            TBBSS_ITER(5);
+            TBBSS_ITER(6);
+            TBBSS_ITER(7);
+            #undef TBBSS_ITER
+        }
     }
 };
 
@@ -954,7 +976,7 @@ void processRecursive(TaskRunner<Value, Comp, ValueTraits> &taskRunner) {
     TBBSS_ASSERT(splits.size() <= std::size(splitsStore));
 
     MultiPivot<Value, ValueTraits> pivot;
-    pivot.initFromSortedSamples(srcElems.subspan(0, numSamples), numBuckets);
+    pivot.initFromSortedSamples(srcElems.subspan(0, numSamples), numBuckets, *shared->comparator_);
 
     multiPartition(
         srcElems, pivot, *shared->comparator_,
