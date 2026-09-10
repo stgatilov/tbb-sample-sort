@@ -707,12 +707,13 @@ void multiPartition(
         localHistoBigStore.clearResize(localHisto.size());
         localHisto = makeSpan(localHistoBigStore);
     }
-    for (size_t i = 0; i < localHisto.size(); i++)
-        localHisto[i] = 0;
 
     parallelWorkers(numWorkers, [&pivot, numElems, numBuckets, numWorkers, srcElems, bucketOf, localHisto, &comp](size_t t) {
         size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
         size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
+        size_t threadHisto[TBBSS_MAX_BUCKETS];
+        for (size_t i = 0; i < numBuckets; i++)
+            threadHisto[i] = 0;
         size_t i = l;
 #ifdef TBBSS_CLASSIFY_UNROLL
         for (; i + TBBSS_CLASSIFY_UNROLL <= r; i += TBBSS_CLASSIFY_UNROLL) {
@@ -725,15 +726,17 @@ void multiPartition(
             for (size_t q = 0; q < TBBSS_CLASSIFY_UNROLL; q++) {
                 size_t b = bidx[q];
                 bucketOf[i + q] = uint8_t(b);
-                localHisto[t * numBuckets + b]++;
+                threadHisto[b]++;
             }
         }
 #endif        
         for (; i < r; i++) {
             size_t b = pivot.classifyOne(srcElems[i], comp);
             bucketOf[i] = uint8_t(b);
-            localHisto[t * numBuckets + b]++;
+            threadHisto[b]++;
         }
+        for (size_t i = 0; i < numBuckets; i++)
+            localHisto[t * numBuckets + i] = threadHisto[i];
     });
 
     TBBSS_ASSERT(splits.size() == numBuckets + 1);
