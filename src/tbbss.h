@@ -529,12 +529,12 @@ template<class Value, class Comp, class ValueTraits> void smallSort(Span<Value> 
 //---------------------------------------------------------
 
 template<class Value, class ValueTraits>
-struct MultiPivot {
+struct alignas(64) MultiPivot {
+    Raw<Value> treeStore_[TBBSS_MAX_BUCKETS];
+    Raw<Value> sortedStore_[TBBSS_MAX_BUCKETS];
     size_t numBits_ = 0;
     size_t numBuckets_ = 0;
     bool hasEqualBuckets_ = false;
-    Raw<Value> sortedStore_[TBBSS_MAX_BUCKETS];
-    Raw<Value> treeStore_[TBBSS_MAX_BUCKETS];
 
     ~MultiPivot() {
         ValueTraits::destroyMany(sortedStore_[0].data(), numBuckets_);
