@@ -28,10 +28,8 @@
 // note: this is tightly coupled to the strategy of selecting number of buckets in the code!
 #define TBBSS_SMALLSORT_MAX 32
 
-// run multi-pivot classification on X elements at once for better ILP and less overhead
-// note: manually unrolled version exists only for X == 8,
-// other values may get slower if a compiler fails to unroll (MSVC does fail)
-#define TBBSS_CLASSIFY_UNROLL 8
+// run multi-pivot classification on several elements at once for better ILP and less overhead
+#define TBBSS_CLASSIFY_UNROLL 1
 
 #ifndef TBBSS_BRANCHLESS_COMPARESWAP
     // force branchless compare-and-swap via XOR and bitmasking in small sort?
@@ -616,45 +614,16 @@ struct alignas(64) MultiPivot {
         return res;
     }
 
-    // classify fixed number of elements at once
-    // for less overhead and better ILP
-    template<size_t N, class Comp>
-    TBBSS_FORCEINLINE void classifyBlock(const Value *value, size_t *res, const Comp &comp) const {
-        Span<const Value> tree(treeStore_[0].data(), numBuckets_ - 1);
-        for (size_t i = 0; i < N; i++)
-            res[i] = 0;
-        for (size_t b = 0; b < numBits_; b++) {
-            for (size_t i = 0; i < N; i++) {
-                bool isLess = comp(value[i], tree[res[i]]);
-                res[i] = 2 * res[i] + 1 + size_t(!isLess);
-            }
-        }
-        for (size_t i = 0; i < N; i++)
-            res[i] -= (numBuckets_ - 1);
-        if (hasEqualBuckets_) {
-            Span<const Value> sorted(sortedStore_[0].data(), numBuckets_);
-            for (size_t i = 0; i < N; i++)
-                res[i] -= (res[i] > 0) & !comp(sorted[res[i]], value[i]);
-        }
-    }
-
-    // sadly, MSVC does not unroll the block loops 
+    // note that MSVC does not unroll the block loops
     // so we have to do it manually =(
     template<class Comp>
-    TBBSS_FORCEINLINE void classifyBlock8(const Value *value, size_t *res, const Comp &comp) const {
+    TBBSS_NOINLINE size_t classifyBlockKernel(const Value *value, uint8_t *bucketOf, size_t *histo, size_t n, const Comp &comp) const {
         Span<const Value> tree(treeStore_[0].data(), numBuckets_ - 1);
-        #define TBBSS_ITER(i) res[i] = 0
-        TBBSS_ITER(0);
-        TBBSS_ITER(1);
-        TBBSS_ITER(2);
-        TBBSS_ITER(3);
-        TBBSS_ITER(4);
-        TBBSS_ITER(5);
-        TBBSS_ITER(6);
-        TBBSS_ITER(7);
-        #undef TBBSS_ITER
-        for (size_t b = 0; b < numBits_; b++) {
-            #define TBBSS_ITER(i) res[i] = 2 * res[i] + 1 + size_t(!comp(value[i], tree[res[i]]));
+
+        n = n / 8 * 8;
+        size_t done = 0;
+        while (done < n) {
+            #define TBBSS_ITER(i) size_t res##i = 0;
             TBBSS_ITER(0);
             TBBSS_ITER(1);
             TBBSS_ITER(2);
@@ -664,20 +633,19 @@ struct alignas(64) MultiPivot {
             TBBSS_ITER(6);
             TBBSS_ITER(7);
             #undef TBBSS_ITER
-        }
-        #define TBBSS_ITER(i) res[i] -= (numBuckets_ - 1);
-        TBBSS_ITER(0);
-        TBBSS_ITER(1);
-        TBBSS_ITER(2);
-        TBBSS_ITER(3);
-        TBBSS_ITER(4);
-        TBBSS_ITER(5);
-        TBBSS_ITER(6);
-        TBBSS_ITER(7);
-        #undef TBBSS_ITER
-        if (hasEqualBuckets_) {
-            Span<const Value> sorted(sortedStore_[0].data(), numBuckets_);
-            #define TBBSS_ITER(i) res[i] -= (res[i] > 0) & !comp(sorted[res[i]], value[i]);
+            for (size_t b = 0; b < numBits_; b++) {
+                #define TBBSS_ITER(i) res##i = 2 * res##i + 1 + size_t(!comp(value[i], tree[res##i]));
+                TBBSS_ITER(0);
+                TBBSS_ITER(1);
+                TBBSS_ITER(2);
+                TBBSS_ITER(3);
+                TBBSS_ITER(4);
+                TBBSS_ITER(5);
+                TBBSS_ITER(6);
+                TBBSS_ITER(7);
+                #undef TBBSS_ITER
+            }
+            #define TBBSS_ITER(i) res##i -= (numBuckets_ - 1);
             TBBSS_ITER(0);
             TBBSS_ITER(1);
             TBBSS_ITER(2);
@@ -687,7 +655,41 @@ struct alignas(64) MultiPivot {
             TBBSS_ITER(6);
             TBBSS_ITER(7);
             #undef TBBSS_ITER
+            if (hasEqualBuckets_) {
+                Span<const Value> sorted(sortedStore_[0].data(), numBuckets_);
+                #define TBBSS_ITER(i) res##i -= (res##i > 0) & !comp(sorted[res##i], value[i]);
+                TBBSS_ITER(0);
+                TBBSS_ITER(1);
+                TBBSS_ITER(2);
+                TBBSS_ITER(3);
+                TBBSS_ITER(4);
+                TBBSS_ITER(5);
+                TBBSS_ITER(6);
+                TBBSS_ITER(7);
+                #undef TBBSS_ITER
+            }
+            #define TBBSS_ITER(i) { \
+                size_t b = res##i; \
+                bucketOf[i] = uint8_t(b); \
+                histo[b]++; \
+            }
+            TBBSS_ITER(0);
+            TBBSS_ITER(1);
+            TBBSS_ITER(2);
+            TBBSS_ITER(3);
+            TBBSS_ITER(4);
+            TBBSS_ITER(5);
+            TBBSS_ITER(6);
+            TBBSS_ITER(7);
+            #undef TBBSS_ITER
+
+            value += 8;
+            bucketOf += 8;
+            done += 8;
         }
+        
+        TBBSS_ASSERT(done == n);
+        return done;
     }
 };
 
@@ -715,21 +717,9 @@ void multiPartition(
         for (size_t i = 0; i < numBuckets; i++)
             threadHisto[i] = 0;
         size_t i = l;
-#ifdef TBBSS_CLASSIFY_UNROLL
-        for (; i + TBBSS_CLASSIFY_UNROLL <= r; i += TBBSS_CLASSIFY_UNROLL) {
-            size_t bidx[TBBSS_CLASSIFY_UNROLL];
-#if TBBSS_CLASSIFY_UNROLL == 8
-            pivot.classifyBlock8(&srcElems[i], bidx, comp);
-#else
-            pivot.template classifyBlock<TBBSS_CLASSIFY_UNROLL>(&srcElems[i], bidx, comp);
+#if TBBSS_CLASSIFY_UNROLL
+        i += pivot.classifyBlockKernel(&srcElems[l], &bucketOf[l], threadHisto, r - l, comp);
 #endif
-            for (size_t q = 0; q < TBBSS_CLASSIFY_UNROLL; q++) {
-                size_t b = bidx[q];
-                bucketOf[i + q] = uint8_t(b);
-                threadHisto[b]++;
-            }
-        }
-#endif        
         for (; i < r; i++) {
             size_t b = pivot.classifyOne(srcElems[i], comp);
             bucketOf[i] = uint8_t(b);
