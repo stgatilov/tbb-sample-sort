@@ -620,74 +620,55 @@ struct alignas(64) MultiPivot {
     TBBSS_NOINLINE size_t classifyBlockKernel(const Value *value, uint8_t *bucketOf, size_t *histo, size_t n, const Comp &comp) const {
         Span<const Value> tree(treeStore_[0].data(), numBuckets_ - 1);
 
+        #define TBBSS_ITERS \
+            TBBSS_ITER(0) \
+            TBBSS_ITER(1) \
+            TBBSS_ITER(2) \
+            TBBSS_ITER(3) \
+            TBBSS_ITER(4) \
+            TBBSS_ITER(5) \
+            TBBSS_ITER(6) \
+            TBBSS_ITER(7)
+
         n = n / 8 * 8;
         size_t done = 0;
         while (done < n) {
             #define TBBSS_ITER(i) size_t res##i = 0;
-            TBBSS_ITER(0);
-            TBBSS_ITER(1);
-            TBBSS_ITER(2);
-            TBBSS_ITER(3);
-            TBBSS_ITER(4);
-            TBBSS_ITER(5);
-            TBBSS_ITER(6);
-            TBBSS_ITER(7);
+            TBBSS_ITERS
             #undef TBBSS_ITER
+
             for (size_t b = 0; b < numBits_; b++) {
                 #define TBBSS_ITER(i) res##i = 2 * res##i + 1 + size_t(!comp(value[i], tree[res##i]));
-                TBBSS_ITER(0);
-                TBBSS_ITER(1);
-                TBBSS_ITER(2);
-                TBBSS_ITER(3);
-                TBBSS_ITER(4);
-                TBBSS_ITER(5);
-                TBBSS_ITER(6);
-                TBBSS_ITER(7);
+                TBBSS_ITERS                
                 #undef TBBSS_ITER
             }
+
             #define TBBSS_ITER(i) res##i -= (numBuckets_ - 1);
-            TBBSS_ITER(0);
-            TBBSS_ITER(1);
-            TBBSS_ITER(2);
-            TBBSS_ITER(3);
-            TBBSS_ITER(4);
-            TBBSS_ITER(5);
-            TBBSS_ITER(6);
-            TBBSS_ITER(7);
+            TBBSS_ITERS
             #undef TBBSS_ITER
+
             if (hasEqualBuckets_) {
                 Span<const Value> sorted(sortedStore_[0].data(), numBuckets_);
                 #define TBBSS_ITER(i) res##i -= (res##i > 0) & !comp(sorted[res##i], value[i]);
-                TBBSS_ITER(0);
-                TBBSS_ITER(1);
-                TBBSS_ITER(2);
-                TBBSS_ITER(3);
-                TBBSS_ITER(4);
-                TBBSS_ITER(5);
-                TBBSS_ITER(6);
-                TBBSS_ITER(7);
+                TBBSS_ITERS
                 #undef TBBSS_ITER
             }
+
             #define TBBSS_ITER(i) { \
                 size_t b = res##i; \
                 bucketOf[i] = uint8_t(b); \
                 histo[b]++; \
             }
-            TBBSS_ITER(0);
-            TBBSS_ITER(1);
-            TBBSS_ITER(2);
-            TBBSS_ITER(3);
-            TBBSS_ITER(4);
-            TBBSS_ITER(5);
-            TBBSS_ITER(6);
-            TBBSS_ITER(7);
+            TBBSS_ITERS
             #undef TBBSS_ITER
 
             value += 8;
             bucketOf += 8;
             done += 8;
         }
-        
+
+        #undef TBBSS_ITERS
+
         TBBSS_ASSERT(done == n);
         return done;
     }
