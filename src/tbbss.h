@@ -29,7 +29,9 @@
 #define TBBSS_SMALLSORT_MAX 32
 
 // run multi-pivot classification on several elements at once for better ILP and less overhead
-#define TBBSS_CLASSIFY_UNROLL 1
+//  * 1 --- lightweight unroll, ~20 comparisons
+//  * 2 --- more unrolling, ~80 comparisons
+#define TBBSS_CLASSIFY_UNROLL 2
 
 #ifndef TBBSS_BRANCHLESS_COMPARESWAP
     // force branchless compare-and-swap via XOR and bitmasking in small sort?
@@ -614,12 +616,12 @@ struct alignas(64) MultiPivot {
         return res;
     }
 
-    // note that MSVC does not unroll the block loops
-    // so we have to do it manually =(
-    template<class Comp>
+    template<bool UnrollMore, class Comp>
     TBBSS_NOINLINE size_t classifyBlockKernel(const Value *value, uint8_t *bucketOf, size_t *histo, size_t n, const Comp &comp) const {
         Span<const Value> tree(treeStore_[0].data(), numBuckets_);
 
+        // note that MSVC does not unroll the block loops
+        // so we have to do it manually =(
         #define TBBSS_ITERS \
             TBBSS_ITER(0) \
             TBBSS_ITER(1) \
@@ -638,11 +640,30 @@ struct alignas(64) MultiPivot {
             TBBSS_ITERS
             #undef TBBSS_ITER
 
-            for (size_t b = 0; b < numBits_; b++) {
-                #define TBBSS_ITER(i) res##i = 2 * res##i + size_t(!comp(value[i], tree[res##i]));
+            #define TBBSS_ITER(i) res##i = 2 * res##i + size_t(!comp(value[i], tree[res##i]));
+            if constexpr (UnrollMore) {
+                TBBSS_ASSERT(numBits_ >= 1 && numBits_ <= 8);
                 TBBSS_ITERS
-                #undef TBBSS_ITER
+                if ((numBits_ - 1) & 4) {
+                    TBBSS_ITERS
+                    TBBSS_ITERS
+                    TBBSS_ITERS
+                    TBBSS_ITERS
+                }
+                if ((numBits_ - 1) & 2) {
+                    TBBSS_ITERS
+                    TBBSS_ITERS
+                }
+                if ((numBits_ - 1) & 1) {
+                    TBBSS_ITERS
+                }
             }
+            else {
+                for (size_t b = 0; b < numBits_; b++) {
+                    TBBSS_ITERS
+                }
+            }
+            #undef TBBSS_ITER
 
             #define TBBSS_ITER(i) res##i -= numBuckets_;
             TBBSS_ITERS
@@ -699,8 +720,10 @@ void multiPartition(
         for (size_t i = 0; i < numBuckets; i++)
             threadHisto[i] = 0;
         size_t i = l;
-#if TBBSS_CLASSIFY_UNROLL
-        i += pivot.classifyBlockKernel(&srcElems[l], &bucketOf[l], threadHisto, r - l, comp);
+#if TBBSS_CLASSIFY_UNROLL == 1
+        i += pivot.template classifyBlockKernel<false>(&srcElems[l], &bucketOf[l], threadHisto, r - l, comp);
+#elif TBBSS_CLASSIFY_UNROLL == 2
+        i += pivot.template classifyBlockKernel<true>(&srcElems[l], &bucketOf[l], threadHisto, r - l, comp);
 #endif
         for (; i < r; i++) {
             size_t b = pivot.classifyOne(srcElems[i], comp);
