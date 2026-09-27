@@ -31,7 +31,10 @@
 // run multi-pivot classification on several elements at once for better ILP and less overhead
 //  * 1 --- lightweight unroll, ~20 comparisons
 //  * 2 --- more unrolling, ~80 comparisons
-#define TBBSS_CLASSIFY_UNROLL 2
+// unfortunately, more unrolling does not automatically means better performance
+// ultimately the best classification kernel should process maximum width while keeping hot variables in registers
+// but register allocation algorithms are heuristic and their output varies across compilers =(
+#define TBBSS_CLASSIFY_UNROLL 1
 
 #ifndef TBBSS_BRANCHLESS_COMPARESWAP
     // force branchless compare-and-swap via XOR and bitmasking in small sort?
@@ -617,7 +620,7 @@ struct alignas(64) MultiPivot {
     }
 
     template<bool UnrollMore, class Comp>
-    TBBSS_NOINLINE size_t classifyBlockKernel(const Value *value, uint8_t *bucketOf, size_t *histo, size_t n, const Comp &comp) const {
+    TBBSS_NOINLINE size_t classifyManyKernel(const Value *value, uint8_t *bucketOf, size_t *histo, size_t n, const Comp &comp) const {
         Span<const Value> tree(treeStore_[0].data(), numBuckets_);
 
         // note that MSVC does not unroll the block loops
@@ -722,9 +725,9 @@ void multiPartition(
             threadHisto[i] = 0;
         size_t i = l;
 #if TBBSS_CLASSIFY_UNROLL == 1
-        i += pivot.template classifyBlockKernel<false>(&srcElems[l], &bucketOf[l], threadHisto, r - l, comp);
+        i += pivot.template classifyManyKernel<false>(&srcElems[l], &bucketOf[l], threadHisto, r - l, comp);
 #elif TBBSS_CLASSIFY_UNROLL == 2
-        i += pivot.template classifyBlockKernel<true>(&srcElems[l], &bucketOf[l], threadHisto, r - l, comp);
+        i += pivot.template classifyManyKernel<true>(&srcElems[l], &bucketOf[l], threadHisto, r - l, comp);
 #endif
         for (; i < r; i++) {
             size_t b = pivot.classifyOne(srcElems[i], comp);

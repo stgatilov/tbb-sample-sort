@@ -9,7 +9,8 @@ At the cost of being somewhat slower of course =)
 
 On Ryzen 5 9600x, sorting 200 millions of 64-bit integers takes:
 * 720 ms for IPS4o
-* 870 ms for PS4o and TBBSS
+* 870 ms for PS4o
+* 900 ms for TBBSS
 
 
 ### Extra memory
