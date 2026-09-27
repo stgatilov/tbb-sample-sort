@@ -629,8 +629,9 @@ struct alignas(64) MultiPivot {
             TBBSS_ITER(5) \
             TBBSS_ITER(6) \
             TBBSS_ITER(7)
+        #define TBBSS_BLOCK 8
 
-        n = n / 8 * 8;
+        n = n / TBBSS_BLOCK * TBBSS_BLOCK;
         size_t done = 0;
         while (done < n) {
             #define TBBSS_ITER(i) size_t res##i = 1;
@@ -662,9 +663,9 @@ struct alignas(64) MultiPivot {
             TBBSS_ITERS
             #undef TBBSS_ITER
 
-            value += 8;
-            bucketOf += 8;
-            done += 8;
+            value += TBBSS_BLOCK;
+            bucketOf += TBBSS_BLOCK;
+            done += TBBSS_BLOCK;
         }
 
         #undef TBBSS_ITERS
