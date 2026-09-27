@@ -689,6 +689,7 @@ struct alignas(64) MultiPivot {
             done += TBBSS_BLOCK;
         }
 
+        #undef TBBSS_BLOCK
         #undef TBBSS_ITERS
 
         TBBSS_ASSERT(done == n);
