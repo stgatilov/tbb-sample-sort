@@ -779,6 +779,7 @@ void multiPartition(
         ](size_t t) {
             size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
             size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
+            Span<size_t> threadHisto = localHisto.subspan(t * numBuckets, numBuckets);
 
             uint32_t bufCnt[TBBSS_MAX_BUCKETS];
             for (size_t b = 0; b < numBuckets; b++)
@@ -791,7 +792,7 @@ void multiPartition(
                 size_t b = bucketOf[i];
                 ValueTraits::relocateOne(buffer[b * Lane + (bufCnt[b]++)].get(), srcElems[i]);
                 if (bufCnt[b] == Lane) {
-                    size_t &pos = localHisto[t * numBuckets + b];
+                    size_t &pos = threadHisto[b];
                     ValueTraits::relocateManyUncached(&dstElems[pos], buffer[b * Lane].data(), bufCnt[b]);
                     pos += bufCnt[b];
                     bufCnt[b] = 0;
@@ -812,9 +813,10 @@ void multiPartition(
         parallelWorkers(numWorkers, [numElems, numBuckets, numWorkers, srcElems, dstElems, localHisto, bucketOf](size_t t) {
             size_t l = uint64_t(numElems) * (t + 0) / numWorkers;
             size_t r = uint64_t(numElems) * (t + 1) / numWorkers;
+            Span<size_t> threadHisto = localHisto.subspan(t * numBuckets, numBuckets);
             for (size_t i = l; i < r; i++) {
                 size_t b = bucketOf[i];
-                size_t &pos = localHisto[t * numBuckets + b];
+                size_t &pos = threadHisto[b];
                 ValueTraits::relocateOne(dstElems[pos++], srcElems[i]);
             }
         });
