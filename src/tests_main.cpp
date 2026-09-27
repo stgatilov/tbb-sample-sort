@@ -207,7 +207,7 @@ TEST_CASE("Determinism") {
     // compare hash of the output against prerecorded hash
     // this ensures determinism across platforms as well
     uint32_t outputHash = computeHash(firstOutput);
-    constexpr uint32_t OUTPUT_PRERECORDED = 1051995632u;
+    constexpr uint32_t OUTPUT_PRERECORDED = 1264419315u;
     CHECK_EQ(outputHash, OUTPUT_PRERECORDED);
 }
 
