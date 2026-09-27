@@ -536,7 +536,7 @@ struct alignas(64) MultiPivot {
 
     ~MultiPivot() {
         ValueTraits::destroyMany(sortedStore_[0].data(), numBuckets_);
-        ValueTraits::destroyMany(treeStore_[0].data(), numBuckets_ - 1);
+        ValueTraits::destroyMany(treeStore_[1].data(), numBuckets_ - 1);
     }
 
     static size_t selectSamples(Span<Value> arr, size_t numBuckets, Random &random) {
@@ -574,7 +574,7 @@ struct alignas(64) MultiPivot {
 
         size_t numBits = log2up(numBuckets);
 
-        Span<Value> tree(treeStore_[0].data(), numBuckets - 1);
+        Span<Value> tree(treeStore_[1].data(), numBuckets - 1);
         TBBSS_ASSERT(tree.size() <= std::size(treeStore_));
         size_t filled = 0;
         for (ptrdiff_t b = numBits - 1; b >= 0; b--) {
@@ -590,16 +590,16 @@ struct alignas(64) MultiPivot {
 
     template<class Comp>
     TBBSS_FORCEINLINE size_t classifyOne(const Value &value, const Comp &comp) const {
-        size_t res = 0;
-        Span<const Value> tree(treeStore_[0].data(), numBuckets_ - 1);
+        size_t res = 1;
+        Span<const Value> tree(treeStore_[0].data(), numBuckets_);
         // find bucket for the element using prepared binary search tree
         for (size_t b = 0; b < numBits_; b++) {
             bool isLess = comp(value, tree[res]);
-            res = 2 * res + 1 + size_t(!isLess);    // branchless
+            res = 2 * res + size_t(!isLess);    // branchless
         }
 
         Span<const Value> sorted(sortedStore_[0].data(), numBuckets_);
-        res -= (numBuckets_ - 1);
+        res -= numBuckets_;
         TBBSS_ASSERT(res == numBuckets_ - 1 || comp(value, sorted[res + 1]));
         TBBSS_ASSERT(res == 0 || !comp(value, sorted[res]));
 
@@ -618,7 +618,7 @@ struct alignas(64) MultiPivot {
     // so we have to do it manually =(
     template<class Comp>
     TBBSS_NOINLINE size_t classifyBlockKernel(const Value *value, uint8_t *bucketOf, size_t *histo, size_t n, const Comp &comp) const {
-        Span<const Value> tree(treeStore_[0].data(), numBuckets_ - 1);
+        Span<const Value> tree(treeStore_[0].data(), numBuckets_);
 
         #define TBBSS_ITERS \
             TBBSS_ITER(0) \
@@ -633,17 +633,17 @@ struct alignas(64) MultiPivot {
         n = n / 8 * 8;
         size_t done = 0;
         while (done < n) {
-            #define TBBSS_ITER(i) size_t res##i = 0;
+            #define TBBSS_ITER(i) size_t res##i = 1;
             TBBSS_ITERS
             #undef TBBSS_ITER
 
             for (size_t b = 0; b < numBits_; b++) {
-                #define TBBSS_ITER(i) res##i = 2 * res##i + 1 + size_t(!comp(value[i], tree[res##i]));
-                TBBSS_ITERS                
+                #define TBBSS_ITER(i) res##i = 2 * res##i + size_t(!comp(value[i], tree[res##i]));
+                TBBSS_ITERS
                 #undef TBBSS_ITER
             }
 
-            #define TBBSS_ITER(i) res##i -= (numBuckets_ - 1);
+            #define TBBSS_ITER(i) res##i -= numBuckets_;
             TBBSS_ITERS
             #undef TBBSS_ITER
 
